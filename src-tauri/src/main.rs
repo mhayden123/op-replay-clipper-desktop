@@ -126,8 +126,8 @@ fn main() {
                 tauri::WebviewUrl::External(SERVER_URL.parse().unwrap()),
             )
             .title("OP Replay Clipper")
-            .inner_size(820.0, 920.0)
-            .min_inner_size(600.0, 700.0)
+            .inner_size(820.0, 1000.0)
+            .min_inner_size(600.0, 760.0)
             .build()?;
 
             Ok(())
