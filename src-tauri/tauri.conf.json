@@ -7,15 +7,7 @@
     "frontendDist": "../src"
   },
   "app": {
-    "windows": [
-      {
-        "title": "OP Replay Clipper",
-        "width": 820,
-        "height": 920,
-        "minWidth": 600,
-        "minHeight": 700
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
