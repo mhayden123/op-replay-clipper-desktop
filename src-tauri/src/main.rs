@@ -10,6 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 const SERVER_URL: &str = "http://localhost:7860";
 const HEALTH_URL: &str = "http://localhost:7860/api/health";
