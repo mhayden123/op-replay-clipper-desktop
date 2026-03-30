@@ -120,7 +120,7 @@ fn main() {
             }
         })
         .setup(|app| {
-            let window = tauri::WebviewWindowBuilder::new(
+            tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::External(SERVER_URL.parse().unwrap()),
