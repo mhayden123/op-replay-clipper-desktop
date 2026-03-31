@@ -26,14 +26,23 @@ ok "Node.js $(node --version) installed"
 # 3. Install Tauri system dependencies (Linux)
 if [[ "$(uname)" == "Linux" ]]; then
     info "Checking Tauri system dependencies..."
-    if command -v apt-get &>/dev/null; then
+    if [ -f /run/ostree-booted ]; then
+        # Immutable distro (Bazzite, Fedora Silverblue, etc.)
+        # Dependencies must be pre-installed via rpm-ostree.
+        if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+            ok "Tauri system dependencies found (immutable OS — install via rpm-ostree if missing)"
+        else
+            fail "WebKitGTK 4.1 not found. Install with: rpm-ostree install webkit2gtk4.1-devel openssl-devel libxdo-devel librsvg2-devel && systemctl reboot"
+        fi
+    elif command -v apt-get &>/dev/null; then
         sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        ok "Tauri system dependencies installed"
     elif command -v dnf &>/dev/null; then
         sudo dnf install -y webkit2gtk4.1-devel openssl-devel curl wget file \
             libxdo-devel librsvg2-devel
+        ok "Tauri system dependencies installed"
     fi
-    ok "Tauri system dependencies installed"
 fi
 
 # 4. Install npm dependencies
