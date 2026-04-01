@@ -66,18 +66,7 @@ fn check_nvidia() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a Docker image exists locally.
-fn image_exists(image: &str) -> bool {
-    Command::new("docker")
-        .args(["image", "inspect", image])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Pull a Docker image with progress output.
+/// Pull a Docker image (no-op if already up to date).
 fn pull_image(image: &str) -> Result<(), String> {
     eprintln!("Pulling {}...", image);
     let status = Command::new("docker")
@@ -87,23 +76,17 @@ fn pull_image(image: &str) -> Result<(), String> {
         .status()
         .map_err(|e| format!("Failed to run docker pull: {}", e))?;
     if status.success() {
-        eprintln!("Pulled {} successfully.", image);
         Ok(())
     } else {
         Err(format!("Failed to pull {}. Check your internet connection.", image))
     }
 }
 
-/// Ensure both Docker images are available, pulling if needed.
+/// Pull latest Docker images, downloading or updating as needed.
 fn ensure_images(status_fn: &dyn Fn(&str)) -> Result<(), String> {
-    if !image_exists(WEB_IMAGE) {
-        status_fn("Pulling web server image (this may take a while on first launch)...");
-        pull_image(WEB_IMAGE)?;
-    }
-    if !image_exists(RENDER_IMAGE) {
-        status_fn("Pulling render image (this may take a while on first launch)...");
-        pull_image(RENDER_IMAGE)?;
-    }
+    status_fn("Checking for updates...");
+    pull_image(WEB_IMAGE)?;
+    pull_image(RENDER_IMAGE)?;
     Ok(())
 }
 
