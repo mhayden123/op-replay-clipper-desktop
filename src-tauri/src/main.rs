@@ -7,9 +7,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Manager;
@@ -20,6 +20,59 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 
 const WEB_IMAGE: &str = "ghcr.io/mhayden123/op-replay-clipper-web:latest";
 const RENDER_IMAGE: &str = "ghcr.io/mhayden123/op-replay-clipper-render:latest";
+
+/// Cached path to the docker binary, resolved once.
+static DOCKER_PATH: OnceLock<String> = OnceLock::new();
+
+/// Resolve the docker binary path. On macOS, GUI-launched apps have a
+/// minimal PATH that doesn't include /usr/local/bin, so we check common
+/// Docker Desktop install locations as a fallback.
+fn resolve_docker() -> String {
+    if Command::new("docker")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+    {
+        return "docker".to_string();
+    }
+
+    let candidates = [
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+    ];
+    for path in candidates {
+        if Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+
+    "docker".to_string()
+}
+
+/// Return a Command pre-configured with the resolved docker binary.
+fn docker_cmd() -> Command {
+    let path = DOCKER_PATH.get_or_init(resolve_docker);
+    Command::new(path)
+}
+
+/// Find the Docker socket path. On newer macOS Docker Desktop versions
+/// the socket may be at ~/.docker/run/docker.sock.
+fn docker_socket_path() -> String {
+    let default = "/var/run/docker.sock";
+    if Path::new(default).exists() {
+        return default.to_string();
+    }
+    if let Some(home) = dirs::home_dir() {
+        let user_socket = home.join(".docker/run/docker.sock");
+        if user_socket.exists() {
+            return user_socket.to_string_lossy().to_string();
+        }
+    }
+    default.to_string()
+}
 
 struct AppState {
     web_container_id: Mutex<Option<String>>,
@@ -43,7 +96,7 @@ fn shared_dir() -> PathBuf {
 
 /// Check if Docker is available.
 fn check_docker() -> Result<(), String> {
-    let output = Command::new("docker")
+    let output = docker_cmd()
         .args(["info"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -69,7 +122,7 @@ fn check_nvidia() -> bool {
 /// Pull a Docker image (no-op if already up to date).
 fn pull_image(image: &str) -> Result<(), String> {
     eprintln!("Pulling {}...", image);
-    let status = Command::new("docker")
+    let status = docker_cmd()
         .args(["pull", image])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -103,7 +156,7 @@ fn start_web_container(has_gpu: bool) -> Result<String, String> {
         "--name".to_string(), "op-replay-clipper-web".to_string(),
         "-p".to_string(), "7860:7860".to_string(),
         "-v".to_string(), format!("{}:/app/shared", shared.display()),
-        "-v".to_string(), "/var/run/docker.sock:/var/run/docker.sock".to_string(),
+        "-v".to_string(), format!("{}:/var/run/docker.sock", docker_socket_path()),
         "-e".to_string(), format!("CLIPPER_IMAGE={}", RENDER_IMAGE),
         "-e".to_string(), format!("SHARED_HOST_DIR={}", shared.display()),
         "-e".to_string(), "SHARED_LOCAL_DIR=/app/shared".to_string(),
@@ -126,7 +179,7 @@ fn start_web_container(has_gpu: bool) -> Result<String, String> {
     args.push(WEB_IMAGE.to_string());
 
     eprintln!("Starting web server container...");
-    let output = Command::new("docker")
+    let output = docker_cmd()
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -167,7 +220,7 @@ fn wait_for_server() -> bool {
 fn stop_web_container(container_id: &mut Option<String>) {
     if let Some(id) = container_id.take() {
         eprintln!("Stopping web container {}...", id);
-        let _ = Command::new("docker")
+        let _ = docker_cmd()
             .args(["stop", &id])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -240,7 +293,7 @@ fn main() {
 
                 // Stop any leftover container from a previous crash
                 send_status(&win, "Starting server...");
-                let _ = Command::new("docker")
+                let _ = docker_cmd()
                     .args(["rm", "-f", "op-replay-clipper-web"])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -262,7 +315,7 @@ fn main() {
                 // Wait for the server to be ready
                 send_status(&win, "Waiting for server to start...");
                 if !wait_for_server() {
-                    let _ = Command::new("docker")
+                    let _ = docker_cmd()
                         .args(["stop", &container_name])
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
