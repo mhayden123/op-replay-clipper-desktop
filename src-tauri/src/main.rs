@@ -6,10 +6,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -96,18 +95,20 @@ fn pull_image(image: &str) -> Result<(), String> {
 }
 
 /// Ensure both Docker images are available, pulling if needed.
-fn ensure_images() -> Result<(), String> {
+fn ensure_images(status_fn: &dyn Fn(&str)) -> Result<(), String> {
     if !image_exists(WEB_IMAGE) {
+        status_fn("Pulling web server image (this may take a while on first launch)...");
         pull_image(WEB_IMAGE)?;
     }
     if !image_exists(RENDER_IMAGE) {
+        status_fn("Pulling render image (this may take a while on first launch)...");
         pull_image(RENDER_IMAGE)?;
     }
     Ok(())
 }
 
 /// Start the web server container directly (no docker-compose needed).
-fn start_web_container() -> Result<(Child, String), String> {
+fn start_web_container(has_gpu: bool) -> Result<String, String> {
     let shared = shared_dir();
     let home = dirs::home_dir().unwrap_or_default();
     let ssh_dir = home.join(".ssh");
@@ -115,6 +116,7 @@ fn start_web_container() -> Result<(Child, String), String> {
     let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
+        "-d".to_string(),
         "--name".to_string(), "op-replay-clipper-web".to_string(),
         "-p".to_string(), "7860:7860".to_string(),
         "-v".to_string(), format!("{}:/app/shared", shared.display()),
@@ -124,6 +126,11 @@ fn start_web_container() -> Result<(Child, String), String> {
         "-e".to_string(), "SHARED_LOCAL_DIR=/app/shared".to_string(),
         "-e".to_string(), format!("HOST_HOME_DIR={}", home.display()),
     ];
+
+    // Tell the web server whether GPU is available for render containers
+    if !has_gpu {
+        args.extend(["-e".to_string(), "HAS_GPU=false".to_string()]);
+    }
 
     // Mount SSH keys if available (for Local SSH download mode)
     if ssh_dir.exists() {
@@ -136,14 +143,19 @@ fn start_web_container() -> Result<(Child, String), String> {
     args.push(WEB_IMAGE.to_string());
 
     eprintln!("Starting web server container...");
-    let child = Command::new("docker")
+    let output = Command::new("docker")
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .map_err(|e| format!("Failed to start web container: {}", e))?;
 
-    Ok((child, "op-replay-clipper-web".to_string()))
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to start web container: {}", stderr.trim()));
+    }
+
+    Ok("op-replay-clipper-web".to_string())
 }
 
 /// Wait for the server health endpoint to respond.
@@ -180,47 +192,21 @@ fn stop_web_container(container_id: &mut Option<String>) {
     }
 }
 
+/// Send a JS call to the window to update the loading status text.
+fn send_status(window: &tauri::WebviewWindow, msg: &str) {
+    let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
+    let _ = window.eval(&format!("updateStatus('{}')", escaped));
+}
+
+/// Send a JS call to the window to show an error message.
+fn send_error(window: &tauri::WebviewWindow, msg: &str) {
+    let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
+    let _ = window.eval(&format!("showError('{}')", escaped));
+}
+
 fn main() {
-    // Pre-flight checks
-    if let Err(msg) = check_docker() {
-        eprintln!("ERROR: {}", msg);
-        std::process::exit(1);
-    }
-
-    let has_gpu = check_nvidia();
-    if !has_gpu {
-        eprintln!("WARNING: No NVIDIA GPU detected. Rendering will use CPU (slower).");
-    }
-
-    // Ensure Docker images are available
-    if let Err(msg) = ensure_images() {
-        eprintln!("ERROR: {}", msg);
-        std::process::exit(1);
-    }
-
-    // Stop any leftover container from a previous crash
-    let _ = Command::new("docker")
-        .args(["rm", "-f", "op-replay-clipper-web"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    // Start the web server
-    let (mut _child, container_name) = start_web_container()
-        .expect("Failed to start web container");
-
-    if !wait_for_server() {
-        eprintln!("Failed to start server. Check Docker logs.");
-        let _ = Command::new("docker")
-            .args(["stop", &container_name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        std::process::exit(1);
-    }
-
     let state = AppState {
-        web_container_id: Mutex::new(Some(container_name)),
+        web_container_id: Mutex::new(None),
     };
 
     tauri::Builder::default()
@@ -233,15 +219,79 @@ fn main() {
             }
         })
         .setup(|app| {
-            tauri::WebviewWindowBuilder::new(
+            // Create the window immediately so the user sees the loading screen
+            let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
-                tauri::WebviewUrl::External(SERVER_URL.parse().unwrap()),
+                tauri::WebviewUrl::App("index.html".into()),
             )
             .title("OP Replay Clipper")
             .inner_size(820.0, 920.0)
             .min_inner_size(600.0, 700.0)
             .build()?;
+
+            // Run all Docker startup in a background thread
+            let handle = app.handle().clone();
+            thread::spawn(move || {
+                let win = window;
+
+                // Check Docker
+                send_status(&win, "Checking Docker...");
+                if let Err(msg) = check_docker() {
+                    send_error(&win, &msg);
+                    return;
+                }
+
+                let has_gpu = check_nvidia();
+                if !has_gpu {
+                    eprintln!("WARNING: No NVIDIA GPU detected. Rendering will use CPU (slower).");
+                }
+
+                // Ensure Docker images are available
+                send_status(&win, "Checking Docker images...");
+                let win_ref = &win;
+                if let Err(msg) = ensure_images(&|status| send_status(win_ref, status)) {
+                    send_error(&win, &msg);
+                    return;
+                }
+
+                // Stop any leftover container from a previous crash
+                send_status(&win, "Starting server...");
+                let _ = Command::new("docker")
+                    .args(["rm", "-f", "op-replay-clipper-web"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+
+                // Start the web server
+                let container_name = match start_web_container(has_gpu) {
+                    Ok(name) => name,
+                    Err(msg) => {
+                        send_error(&win, &msg);
+                        return;
+                    }
+                };
+
+                // Store container name for cleanup on window close
+                let state = handle.state::<AppState>();
+                *state.web_container_id.lock().unwrap() = Some(container_name.clone());
+
+                // Wait for the server to be ready
+                send_status(&win, "Waiting for server to start...");
+                if !wait_for_server() {
+                    let _ = Command::new("docker")
+                        .args(["stop", &container_name])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    *state.web_container_id.lock().unwrap() = None;
+                    send_error(&win, "Server failed to start in time. Check that Docker has enough resources allocated.");
+                    return;
+                }
+
+                // Redirect the window to the running server
+                let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
+            });
 
             Ok(())
         })

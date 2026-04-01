@@ -25,13 +25,54 @@
       margin: 0 auto 16px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .error-icon {
+      font-size: 36px;
+      margin-bottom: 16px;
+    }
+    .error-msg {
+      color: #f87171;
+      font-size: 15px;
+      max-width: 500px;
+      line-height: 1.5;
+    }
+    .error-msg a {
+      color: #60a5fa;
+      text-decoration: underline;
+    }
+    .hint {
+      font-size: 12px;
+      margin-top: 8px;
+      opacity: 0.5;
+    }
   </style>
 </head>
 <body>
-  <div class="loading">
-    <div class="spinner"></div>
-    <p>Starting server...</p>
-    <p style="font-size:12px; margin-top:8px; opacity:0.5;">The window will redirect when ready</p>
+  <div class="loading" id="loading">
+    <div class="spinner" id="spinner"></div>
+    <p id="status">Starting...</p>
+    <p class="hint" id="hint">The window will redirect when ready</p>
   </div>
+  <script>
+    function updateStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+    function escapeHtml(s) {
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    function showError(msg) {
+      var el = document.getElementById('loading');
+      var hint = '';
+      if (msg.indexOf('not installed') !== -1 || msg.indexOf('not running') !== -1) {
+        hint = '<a href="https://www.docker.com/products/docker-desktop/" target="_blank">Download Docker Desktop</a>';
+      }
+      el.innerHTML =
+        '<div class="error-icon">&#x26A0;</div>' +
+        '<div class="error-msg">' + escapeHtml(msg) + '</div>' +
+        (hint ? '<p style="margin-top:16px">' + hint + '</p>' : '') +
+        '<p class="hint" style="margin-top:16px">Fix the issue and relaunch the app.</p>';
+    }
+  </script>
 </body>
 </html>
