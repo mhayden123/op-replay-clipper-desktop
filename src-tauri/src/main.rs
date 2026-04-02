@@ -39,9 +39,12 @@ fn resolve_docker() -> String {
     }
 
     let candidates = [
+        // macOS
         "/usr/local/bin/docker",
         "/opt/homebrew/bin/docker",
         "/Applications/Docker.app/Contents/Resources/bin/docker",
+        // Windows
+        "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
     ];
     for path in candidates {
         if Path::new(path).exists() {
@@ -58,17 +61,22 @@ fn docker_cmd() -> Command {
     Command::new(path)
 }
 
-/// Find the Docker socket path. On newer macOS Docker Desktop versions
-/// the socket may be at ~/.docker/run/docker.sock.
+/// Find the Docker socket path. Checks platform-specific locations.
 fn docker_socket_path() -> String {
     let default = "/var/run/docker.sock";
     if Path::new(default).exists() {
         return default.to_string();
     }
     if let Some(home) = dirs::home_dir() {
-        let user_socket = home.join(".docker/run/docker.sock");
-        if user_socket.exists() {
-            return user_socket.to_string_lossy().to_string();
+        // Newer Docker Desktop on macOS
+        let candidates = [
+            home.join(".docker/run/docker.sock"),
+            home.join("Library/Containers/com.docker.docker/Data/docker.sock"),
+        ];
+        for socket in &candidates {
+            if socket.exists() {
+                return socket.to_string_lossy().to_string();
+            }
         }
     }
     default.to_string()
