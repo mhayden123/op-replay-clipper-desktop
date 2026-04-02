@@ -94,6 +94,22 @@ fn shared_dir() -> PathBuf {
     dir
 }
 
+/// Detect the host's LAN IP address for network scanning inside containers.
+fn detect_host_lan_ip() -> Option<String> {
+    // Try connecting to a public DNS to determine which interface is used for LAN
+    if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:53").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip().to_string();
+                if !ip.starts_with("127.") {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Check if Docker is available.
 fn check_docker() -> Result<(), String> {
     let output = docker_cmd()
@@ -162,6 +178,11 @@ fn start_web_container(has_gpu: bool) -> Result<String, String> {
         "-e".to_string(), "SHARED_LOCAL_DIR=/app/shared".to_string(),
         "-e".to_string(), format!("HOST_HOME_DIR={}", home.display()),
     ];
+
+    // Pass the host LAN IP so the container knows which subnet to scan
+    if let Some(lan_ip) = detect_host_lan_ip() {
+        args.extend(["-e".to_string(), format!("HOST_LAN_IP={}", lan_ip)]);
+    }
 
     // Tell the web server whether GPU is available for render containers
     if !has_gpu {
