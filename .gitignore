@@ -1,3 +1,5 @@
 src-tauri/target/
 node_modules/
 .env
+src-tauri/gen/
+package-lock.json

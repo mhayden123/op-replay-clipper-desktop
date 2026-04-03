@@ -87,6 +87,17 @@ fn find_clipper_project() -> Option<PathBuf> {
         candidates.push(home.join("op-replay-clipper-native"));
     }
 
+    // Windows: check LOCALAPPDATA (where the NSIS installer puts it)
+    if cfg!(windows) {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(&local_app_data)
+                    .join("op-replay-clipper")
+                    .join("op-replay-clipper-native"),
+            );
+        }
+    }
+
     candidates.into_iter().find(|p| p.join("clip.py").exists())
 }
 
@@ -278,6 +289,104 @@ fn stop_server(process: &mut Option<Child>) {
 }
 
 // ---------------------------------------------------------------------------
+// Windows first-run bootstrap
+// ---------------------------------------------------------------------------
+
+/// Check if the Windows bootstrap has completed (marker file exists).
+#[cfg(target_os = "windows")]
+fn bootstrap_completed() -> bool {
+    data_dir().join("bootstrap-complete").exists()
+}
+
+/// Run the bootstrap.ps1 script bundled as a resource.
+/// Returns true if bootstrap succeeded, false otherwise.
+/// Reads progress from the progress file and sends status updates to the window.
+#[cfg(target_os = "windows")]
+fn run_bootstrap(
+    window: &tauri::WebviewWindow,
+    resource_dir: &std::path::Path,
+) -> bool {
+    let script = resource_dir.join("resources").join("bootstrap.ps1");
+    if !script.exists() {
+        // Try alternative resource path (Tauri bundles resources differently)
+        let alt = resource_dir.join("bootstrap.ps1");
+        if !alt.exists() {
+            eprintln!("Bootstrap script not found at {:?} or {:?}", script, alt);
+            return false;
+        }
+        return run_bootstrap_script(window, &alt);
+    }
+    run_bootstrap_script(window, &script)
+}
+
+#[cfg(target_os = "windows")]
+fn run_bootstrap_script(
+    window: &tauri::WebviewWindow,
+    script: &std::path::Path,
+) -> bool {
+    use std::io::BufRead;
+
+    eprintln!("Running bootstrap: {:?}", script);
+    send_status(window, "Setting up (this may take a few minutes)...");
+
+    let result = Command::new("powershell.exe")
+        .args([
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            &script.to_string_lossy(),
+            "-Silent",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match result {
+        Ok(mut child) => {
+            // Read stdout for progress updates
+            if let Some(stdout) = child.stdout.take() {
+                let reader = std::io::BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        if line.starts_with("==>") {
+                            let msg = line.trim_start_matches("==>").trim();
+                            send_status(window, msg);
+                        }
+                        eprintln!("[bootstrap] {}", line);
+                    }
+                }
+            }
+            let status = child.wait();
+            match status {
+                Ok(s) if s.success() => {
+                    eprintln!("Bootstrap completed successfully");
+                    true
+                }
+                Ok(s) => {
+                    eprintln!("Bootstrap failed with exit code: {:?}", s.code());
+                    false
+                }
+                Err(e) => {
+                    eprintln!("Bootstrap wait error: {}", e);
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to launch bootstrap: {}", e);
+            false
+        }
+    }
+}
+
+// Stub for non-Windows platforms
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+fn bootstrap_completed() -> bool {
+    true // No bootstrap needed on Linux/macOS
+}
+
+// ---------------------------------------------------------------------------
 // Window communication
 // ---------------------------------------------------------------------------
 
@@ -321,8 +430,27 @@ fn main() {
             .build()?;
 
             let handle = app.handle().clone();
+            #[cfg(target_os = "windows")]
+            let resource_path = app.path().resource_dir().ok();
             thread::spawn(move || {
                 let win = window;
+
+                // Windows: run first-run bootstrap if not completed
+                #[cfg(target_os = "windows")]
+                {
+                    if !bootstrap_completed() {
+                        send_status(&win, "First-time setup — installing dependencies...");
+                        if let Some(ref res_dir) = resource_path {
+                            if run_bootstrap(&win, res_dir) {
+                                send_status(&win, "Setup complete!");
+                            } else {
+                                send_status(&win, "Setup had issues — trying to continue...");
+                            }
+                        } else {
+                            eprintln!("WARNING: Could not determine resource directory for bootstrap");
+                        }
+                    }
+                }
 
                 // Check native environment
                 send_status(&win, "Checking environment...");
