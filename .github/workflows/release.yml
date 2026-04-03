@@ -3,13 +3,12 @@ name: Release
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -56,13 +55,70 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Upload Linux artifacts
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
         with:
-          tagName: v__VERSION__
-          releaseName: 'OP Replay Clipper v__VERSION__'
-          releaseBody: |
+          name: linux-x86_64
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+
+      - name: Upload macOS artifacts (aarch64)
+        if: matrix.target == 'aarch64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload macOS artifacts (x86_64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "OP Replay Clipper ${{ github.ref_name }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
+            artifacts/**/*.dmg
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+          body: |
             ## Native Desktop App (No Docker Required)
 
             Download the installer for your platform. The app launches a local web server
@@ -75,13 +131,14 @@ jobs:
             | **Linux** | `.AppImage` | Portable, run anywhere |
             | **Linux** | `.deb` | Ubuntu, Debian, Mint, Pop!_OS |
             | **Linux** | `.rpm` | Fedora, RHEL |
-            | **macOS** | `.dmg` | Apple Silicon + Intel |
+            | **macOS (Apple Silicon)** | `.dmg` | M1/M2/M3/M4 |
+            | **macOS (Intel)** | `.dmg` | Intel Macs |
             | **Windows** | `.msi` | Windows 10/11 installer |
             | **Windows** | `.exe` | NSIS installer |
 
             ### Prerequisites
 
-            1. Clone and install the native clipper:
+            1. Clone and install the native clipper first:
                - **Linux/macOS**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh`
                - **Windows**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && python install_windows.py`
             2. Run the desktop app — it finds the clipper project and starts the server automatically.
@@ -91,6 +148,3 @@ jobs:
             - **Linux**: Full support — all render types, NVIDIA GPU acceleration (NVENC)
             - **macOS**: All render types, VideoToolbox hardware acceleration
             - **Windows**: Non-UI renders native, UI renders (ui, ui-alt, driver-debug) require WSL
-          releaseDraft: true
-          prerelease: false
-          args: --target ${{ matrix.target }}
