@@ -63,20 +63,34 @@ jobs:
           tagName: v__VERSION__
           releaseName: 'OP Replay Clipper v__VERSION__'
           releaseBody: |
-            ## Download
+            ## Native Desktop App (No Docker Required)
 
-            Choose the installer for your platform:
-            - **Linux**: `.AppImage` (portable) or `.deb` (Debian/Ubuntu)
-            - **macOS**: `.dmg` (drag to Applications)
-            - **Windows**: `.msi` (installer)
+            Download the installer for your platform. The app launches a local web server
+            and opens the clipper UI — no Docker, no containers, direct GPU access.
 
-            ## Prerequisites
+            ### Downloads
 
-            - [Docker Desktop](https://www.docker.com/products/docker-desktop/) must be installed
-            - **Linux/Windows**: NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for GPU-accelerated rendering
-            - **macOS**: CPU-only rendering (no NVIDIA GPU required)
+            | Platform | Format | Notes |
+            |----------|--------|-------|
+            | **Linux** | `.AppImage` | Portable, run anywhere |
+            | **Linux** | `.deb` | Ubuntu, Debian, Mint, Pop!_OS |
+            | **Linux** | `.rpm` | Fedora, RHEL |
+            | **macOS** | `.dmg` | Apple Silicon + Intel |
+            | **Windows** | `.msi` | Windows 10/11 installer |
+            | **Windows** | `.exe` | NSIS installer |
 
-            On first launch, the app will automatically pull the required Docker images (~10 GB).
+            ### Prerequisites
+
+            1. Clone and install the native clipper:
+               - **Linux/macOS**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh`
+               - **Windows**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && python install_windows.py`
+            2. Run the desktop app — it finds the clipper project and starts the server automatically.
+
+            ### Platform Notes
+
+            - **Linux**: Full support — all render types, NVIDIA GPU acceleration (NVENC)
+            - **macOS**: All render types, VideoToolbox hardware acceleration
+            - **Windows**: Non-UI renders native, UI renders (ui, ui-alt, driver-debug) require WSL
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
