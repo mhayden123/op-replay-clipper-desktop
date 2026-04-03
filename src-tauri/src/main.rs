@@ -2,6 +2,11 @@
 //
 // Manages a local FastAPI server (uvicorn) as a child process.
 // No Docker dependency — the rendering pipeline runs natively.
+//
+// Platform support:
+//   Linux:   Full support (all render types, NVIDIA GPU)
+//   macOS:   Full support (all render types, VideoToolbox GPU)
+//   Windows: Non-UI renders native, UI renders via WSL
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -60,10 +65,8 @@ fn find_clipper_project() -> Option<PathBuf> {
     // Sibling of the running executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            // Binary might be in src-tauri/target/debug or next to the app
             for ancestor in [parent, parent.parent().unwrap_or(parent)] {
                 candidates.push(ancestor.join("op-replay-clipper-native"));
-                // Also check if we're running from inside the project
                 if ancestor.join("clip.py").exists() {
                     return Some(ancestor.to_path_buf());
                 }
@@ -89,21 +92,37 @@ fn find_clipper_project() -> Option<PathBuf> {
 
 /// Resolve the `uv` binary path. Checks PATH, then common install locations.
 fn resolve_uv() -> Option<String> {
-    if Command::new("uv")
+    // Try PATH first
+    let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+    if Command::new(uv_name)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok()
     {
-        return Some("uv".to_string());
+        return Some(uv_name.to_string());
     }
 
     let home = dirs::home_dir()?;
-    let candidates = [home.join(".local/bin/uv"), home.join(".cargo/bin/uv")];
-    for path in &candidates {
-        if path.exists() {
-            return Some(path.to_string_lossy().to_string());
+
+    if cfg!(windows) {
+        // Windows: uv installs to %USERPROFILE%\.local\bin or via pip
+        let candidates = [
+            home.join(".local\\bin\\uv.exe"),
+            home.join("AppData\\Roaming\\Python\\Scripts\\uv.exe"),
+        ];
+        for path in &candidates {
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    } else {
+        let candidates = [home.join(".local/bin/uv"), home.join(".cargo/bin/uv")];
+        for path in &candidates {
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -114,9 +133,14 @@ fn resolve_uv() -> Option<String> {
 // Environment checks
 // ---------------------------------------------------------------------------
 
-/// Check if NVIDIA GPU is available.
+/// Check if NVIDIA GPU is available (Linux/Windows).
 fn check_nvidia() -> bool {
-    Command::new("nvidia-smi")
+    let smi = if cfg!(windows) {
+        "nvidia-smi.exe"
+    } else {
+        "nvidia-smi"
+    };
+    Command::new(smi)
         .arg("-L")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -125,19 +149,58 @@ fn check_nvidia() -> bool {
         .unwrap_or(false)
 }
 
+/// Check if WSL is available and has a running distribution (Windows only).
+#[cfg(target_os = "windows")]
+fn check_wsl() -> bool {
+    Command::new("wsl.exe")
+        .args(["--list", "--verbose"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("Running"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn check_wsl() -> bool {
+    false
+}
+
 /// Check that the native clipper environment is set up.
 fn check_environment() -> Result<(PathBuf, String), String> {
     // Find clipper project
-    let project_dir = find_clipper_project()
-        .ok_or("Clipper project not found. Clone op-replay-clipper-native and run ./install.sh")?;
+    let project_dir = find_clipper_project().ok_or_else(|| {
+        if cfg!(windows) {
+            "Clipper project not found. Clone op-replay-clipper-native and run install_windows.py"
+                .to_string()
+        } else {
+            "Clipper project not found. Clone op-replay-clipper-native and run ./install.sh"
+                .to_string()
+        }
+    })?;
 
     // Check uv
-    let uv_path = resolve_uv().ok_or("uv not found. Run the install script: ./install.sh")?;
+    let uv_path = resolve_uv().ok_or_else(|| {
+        if cfg!(windows) {
+            "uv not found. Run: pip install uv".to_string()
+        } else {
+            "uv not found. Run the install script: ./install.sh".to_string()
+        }
+    })?;
 
-    // Check openpilot installation
-    let openpilot_dir = data_dir().join("openpilot");
-    if !openpilot_dir.join(".venv/bin/python").exists() {
-        return Err("openpilot not installed. Run ./install.sh in the clipper project.".into());
+    // On Linux/macOS, check for openpilot installation (needed for UI renders).
+    // On Windows, openpilot is optional (only non-UI renders run natively).
+    if !cfg!(windows) {
+        let python_path = if cfg!(target_os = "macos") {
+            data_dir().join("openpilot/.venv/bin/python")
+        } else {
+            data_dir().join("openpilot/.venv/bin/python")
+        };
+        if !python_path.exists() {
+            return Err(
+                "openpilot not installed. Run ./install.sh in the clipper project.".into(),
+            );
+        }
     }
 
     Ok((project_dir, uv_path))
@@ -153,7 +216,6 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     let output_dir = data_dir().join("output");
     let data_dir_path = data_dir().join("data");
 
-    // Ensure output/data dirs exist
     fs::create_dir_all(&output_dir).ok();
     fs::create_dir_all(&data_dir_path).ok();
 
@@ -272,11 +334,24 @@ fn main() {
                     }
                 };
 
-                let has_gpu = check_nvidia();
-                if has_gpu {
+                // Platform-specific GPU detection
+                if cfg!(target_os = "macos") {
+                    eprintln!("macOS detected — VideoToolbox hardware acceleration available.");
+                } else if check_nvidia() {
                     eprintln!("NVIDIA GPU detected.");
                 } else {
-                    eprintln!("WARNING: No NVIDIA GPU detected. Rendering will use CPU (slower).");
+                    eprintln!(
+                        "WARNING: No NVIDIA GPU detected. Rendering will use CPU (slower)."
+                    );
+                }
+
+                // Windows: report WSL status
+                if cfg!(windows) {
+                    if check_wsl() {
+                        eprintln!("WSL detected — UI render types available.");
+                    } else {
+                        eprintln!("WSL not detected — only non-UI render types available.");
+                    }
                 }
 
                 // Start the server
@@ -296,12 +371,19 @@ fn main() {
                 // Wait for the server to be ready
                 send_status(&win, "Waiting for server...");
                 if !wait_for_server() {
-                    // Server failed to start — kill it and show error
                     let mut proc = state.server_process.lock().unwrap();
                     stop_server(&mut proc);
+                    let install_cmd = if cfg!(windows) {
+                        "install_windows.py"
+                    } else {
+                        "./install.sh"
+                    };
                     send_error(
                         &win,
-                        "Server failed to start. Run ./install.sh to set up the environment.",
+                        &format!(
+                            "Server failed to start. Run {} to set up the environment.",
+                            install_cmd
+                        ),
                     );
                     return;
                 }
