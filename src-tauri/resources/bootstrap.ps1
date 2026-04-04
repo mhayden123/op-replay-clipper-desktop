@@ -444,9 +444,19 @@ if (Test-Path $clipPy) {
 Write-Step 'Installing Python dependencies'
 try {
     Push-Location $ProjectDir
+    # First try with locked versions
     $r = Invoke-Native 'uv' @('sync')
     Write-Host ('  uv sync exit code: ' + $r.ExitCode)
     if ($r.Output) { Write-Host ('  ' + $r.Output) }
+    if ($r.Error) { Write-Host ('  uv stderr: ' + $r.Error) }
+    if ($r.ExitCode -ne 0) {
+        # Exit code 2 = lock file mismatch (common cross-platform).
+        # Retry without --frozen to let uv re-resolve for this platform.
+        Write-Host '  Retrying with --no-frozen...'
+        $r2 = Invoke-Native 'uv' @('sync', '--no-frozen')
+        Write-Host ('  uv sync --no-frozen exit code: ' + $r2.ExitCode)
+        if ($r2.Output) { Write-Host ('  ' + $r2.Output) }
+    }
     Pop-Location
     Write-OK 'Python dependencies installed'
 } catch {
