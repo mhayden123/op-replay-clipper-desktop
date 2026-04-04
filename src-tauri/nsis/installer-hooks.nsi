@@ -1,18 +1,18 @@
-; OP Replay Clipper - NSIS Installer Hooks
-; Uses registry key HKCU\Software\OP Replay Clipper to track install paths.
+; GlideKit - NSIS Installer Hooks
+; Uses registry key HKCU\Software\GlideKit to track install paths.
 
 !macro customInstall
   SetDetailsPrint both
 
   DetailPrint ""
-  DetailPrint "Setting up OP Replay Clipper backend..."
+  DetailPrint "Setting up GlideKit backend..."
   DetailPrint ""
 
   ; Create log directory
-  CreateDirectory "$LOCALAPPDATA\op-replay-clipper"
+  CreateDirectory "$LOCALAPPDATA\glidekit"
 
   ; Log diagnostic info
-  FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" w
+  FileOpen $1 "$LOCALAPPDATA\glidekit\install.log" w
   FileWrite $1 "=== NSIS Install Log ===$\r$\n"
   FileWrite $1 "INSTDIR: $INSTDIR$\r$\n"
   FileWrite $1 "LOCALAPPDATA: $LOCALAPPDATA$\r$\n"
@@ -47,25 +47,25 @@
 
   ; Detect previous installation — if exists, always run -Clean for a fresh state
   StrCpy $3 ""
-  IfFileExists "$LOCALAPPDATA\op-replay-clipper\op-replay-clipper-native\clip.py" 0 NoPreviousInstall
+  IfFileExists "$LOCALAPPDATA\glidekit\glidekit\clip.py" 0 NoPreviousInstall
     StrCpy $3 "-Clean"
     DetailPrint "Previous installation detected. Running clean reinstall."
   NoPreviousInstall:
 
   DetailPrint "Running: $2 $3"
-  FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
+  FileOpen $1 "$LOCALAPPDATA\glidekit\install.log" a
   FileSeek $1 0 END
   FileWrite $1 "Launching PowerShell: $2 $3$\r$\n"
   FileClose $1
 
   ; Write registry key for InstallPath (app exe location)
-  WriteRegStr HKCU "Software\OP Replay Clipper" "InstallPath" "$INSTDIR"
+  WriteRegStr HKCU "Software\GlideKit" "InstallPath" "$INSTDIR"
 
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$2" $3'
   Pop $0
 
   ; Log exit code
-  FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
+  FileOpen $1 "$LOCALAPPDATA\glidekit\install.log" a
   FileSeek $1 0 END
   FileWrite $1 "PowerShell exit code: $0$\r$\n"
   FileClose $1
@@ -90,14 +90,14 @@
 
   ; Confirmation dialog
   MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Remove all OP Replay Clipper data?$\r$\n$\r$\nThis deletes downloaded routes, rendered clips, openpilot data, and all backend files.$\r$\n$\r$\nChoose No to keep your data." \
+    "Remove all GlideKit data?$\r$\n$\r$\nThis deletes downloaded routes, rendered clips, openpilot data, and all backend files.$\r$\n$\r$\nChoose No to keep your data." \
     IDYES DoRemoveData
   Goto SkipDataRemoval
 
   DoRemoveData:
 
   ; Read ClipperHome from registry
-  ReadRegStr $0 HKCU "Software\OP Replay Clipper" "ClipperHome"
+  ReadRegStr $0 HKCU "Software\GlideKit" "ClipperHome"
 
   ${If} $0 != ""
     DetailPrint "Removing data directory (from registry): $0"
@@ -105,24 +105,24 @@
   ${EndIf}
 
   ; Also check common fallback locations in case registry is missing
-  IfFileExists "$LOCALAPPDATA\op-replay-clipper\*.*" 0 +3
-    DetailPrint "Removing: $LOCALAPPDATA\op-replay-clipper"
-    RMDir /r "$LOCALAPPDATA\op-replay-clipper"
+  IfFileExists "$LOCALAPPDATA\glidekit\*.*" 0 +3
+    DetailPrint "Removing: $LOCALAPPDATA\glidekit"
+    RMDir /r "$LOCALAPPDATA\glidekit"
 
-  IfFileExists "$PROFILE\.op-replay-clipper\*.*" 0 +3
-    DetailPrint "Removing: $PROFILE\.op-replay-clipper"
-    RMDir /r "$PROFILE\.op-replay-clipper"
+  IfFileExists "$PROFILE\.glidekit\*.*" 0 +3
+    DetailPrint "Removing: $PROFILE\.glidekit"
+    RMDir /r "$PROFILE\.glidekit"
 
-  IfFileExists "$APPDATA\op-replay-clipper\*.*" 0 +3
-    DetailPrint "Removing: $APPDATA\op-replay-clipper"
-    RMDir /r "$APPDATA\op-replay-clipper"
+  IfFileExists "$APPDATA\glidekit\*.*" 0 +3
+    DetailPrint "Removing: $APPDATA\glidekit"
+    RMDir /r "$APPDATA\glidekit"
 
   DetailPrint "Data removed."
 
   SkipDataRemoval:
 
   ; Always clean up registry
-  DeleteRegKey HKCU "Software\OP Replay Clipper"
+  DeleteRegKey HKCU "Software\GlideKit"
   DetailPrint "Registry cleaned."
 
   DetailPrint ""
