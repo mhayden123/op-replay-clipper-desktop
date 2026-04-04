@@ -96,8 +96,8 @@
 
   DoRemoveData:
 
-  ; Read ClipperHome from registry
-  ReadRegStr $0 HKCU "Software\GlideKit" "ClipperHome"
+  ; Read GlideKitHome from registry
+  ReadRegStr $0 HKCU "Software\GlideKit" "GlideKitHome"
 
   ${If} $0 != ""
     DetailPrint "Removing data directory (from registry): $0"

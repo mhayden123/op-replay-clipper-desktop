@@ -140,7 +140,7 @@ jobs:
             ## Native Desktop App (No Docker Required)
 
             Download the installer for your platform. The app launches a local web server
-            and opens the clipper UI — no Docker, no containers, direct GPU access.
+            and opens the GlideKit UI — no Docker, no containers, direct GPU access.
 
             ### Downloads
 
@@ -156,10 +156,10 @@ jobs:
 
             ### Prerequisites
 
-            1. Clone and install the native clipper first:
+            1. Clone and install GlideKit first:
                - **Linux/macOS**: `git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh`
                - **Windows**: `git clone https://github.com/mhayden123/glidekit && cd glidekit && python install_windows.py`
-            2. Run the desktop app — it finds the clipper project and starts the server automatically.
+            2. Run the desktop app — it finds the GlideKit project and starts the server automatically.
 
             ### Platform Notes
 

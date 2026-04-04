@@ -15,23 +15,23 @@ param(
 # Registry key for tracking install locations
 $RegKey = 'HKCU:\Software\GlideKit'
 
-# Determine ClipperHome - check registry first, then default
-$ClipperHome = $null
+# Determine GlideKitHome - check registry first, then default
+$GlideKitHome = $null
 try {
-    $regVal = Get-ItemProperty -Path $RegKey -Name 'ClipperHome' -ErrorAction SilentlyContinue
-    if ($regVal -and $regVal.ClipperHome -and (Test-Path $regVal.ClipperHome)) {
-        $ClipperHome = $regVal.ClipperHome
+    $regVal = Get-ItemProperty -Path $RegKey -Name 'GlideKitHome' -ErrorAction SilentlyContinue
+    if ($regVal -and $regVal.GlideKitHome -and (Test-Path $regVal.GlideKitHome)) {
+        $GlideKitHome = $regVal.GlideKitHome
     }
 } catch {}
-if (-not $ClipperHome) {
-    $ClipperHome = Join-Path $env:LOCALAPPDATA 'glidekit'
+if (-not $GlideKitHome) {
+    $GlideKitHome = Join-Path $env:LOCALAPPDATA 'glidekit'
 }
 
 # Guarantee logging from the very first line
-if (-not (Test-Path $ClipperHome)) {
-    New-Item -ItemType Directory -Force -Path $ClipperHome | Out-Null
+if (-not (Test-Path $GlideKitHome)) {
+    New-Item -ItemType Directory -Force -Path $GlideKitHome | Out-Null
 }
-$LogFile = Join-Path $ClipperHome 'bootstrap-app.log'
+$LogFile = Join-Path $GlideKitHome 'bootstrap-app.log'
 Start-Transcript -Path $LogFile -Force
 
 $ErrorActionPreference = 'Continue'
@@ -52,8 +52,8 @@ Write-Host ('Working dir: ' + (Get-Location).Path)
 Write-Host ('Date: ' + (Get-Date -Format o))
 Write-Host ''
 
-$ProjectDir = Join-Path $ClipperHome 'glidekit'
-$CheckpointFile = Join-Path $ClipperHome 'bootstrap-checkpoints.txt'
+$ProjectDir = Join-Path $GlideKitHome 'glidekit'
+$CheckpointFile = Join-Path $GlideKitHome 'bootstrap-checkpoints.txt'
 
 function Write-Step {
     param([string]$Message)
@@ -155,7 +155,7 @@ try {
 }
 if (-not $netOk) {
     Write-Fail 'No internet connection'
-    Write-Host '  Bootstrap requires internet to download Python, Git, and the clipper project.'
+    Write-Host '  Bootstrap requires internet to download Python, Git, and the GlideKit project.'
     Write-Host '  Check your network settings and try again.'
     Stop-Transcript
     exit 1
@@ -165,11 +165,11 @@ if (-not $netOk) {
 if ($Clean) {
     Write-Step 'Clean install requested'
     # Read existing location from registry before deleting
-    $cleanDir = $ClipperHome
+    $cleanDir = $GlideKitHome
     try {
-        $regVal = Get-ItemProperty -Path $RegKey -Name 'ClipperHome' -ErrorAction SilentlyContinue
-        if ($regVal -and $regVal.ClipperHome) {
-            $cleanDir = $regVal.ClipperHome
+        $regVal = Get-ItemProperty -Path $RegKey -Name 'GlideKitHome' -ErrorAction SilentlyContinue
+        if ($regVal -and $regVal.GlideKitHome) {
+            $cleanDir = $regVal.GlideKitHome
         }
     } catch {}
     # Delete the entire data directory
@@ -179,8 +179,8 @@ if ($Clean) {
         Stop-Transcript
         Remove-Item -Path $cleanDir -Recurse -Force -ErrorAction SilentlyContinue
         # Recreate and restart transcript
-        New-Item -ItemType Directory -Force -Path $ClipperHome | Out-Null
-        $LogFile = Join-Path $ClipperHome 'bootstrap-app.log'
+        New-Item -ItemType Directory -Force -Path $GlideKitHome | Out-Null
+        $LogFile = Join-Path $GlideKitHome 'bootstrap-app.log'
         Start-Transcript -Path $LogFile -Force
     }
     # Clean registry
@@ -192,10 +192,10 @@ if ($Clean) {
 
 # --- Create directories ---
 Write-Step 'Creating directories'
-New-Item -ItemType Directory -Force -Path $ClipperHome | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $ClipperHome 'output') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $ClipperHome 'data') | Out-Null
-Write-OK ('Directories created: ' + $ClipperHome)
+New-Item -ItemType Directory -Force -Path $GlideKitHome | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $GlideKitHome 'output') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $GlideKitHome 'data') | Out-Null
+Write-OK ('Directories created: ' + $GlideKitHome)
 
 # --- Install Git ---
 Write-Step 'Checking Git'
@@ -504,8 +504,8 @@ if (Test-CommandExists 'uv') {
     }
 }
 
-# --- Clone the clipper project ---
-Write-Step 'Setting up clipper project'
+# --- Clone the GlideKit project ---
+Write-Step 'Setting up GlideKit project'
 $clipPy = Join-Path $ProjectDir 'clip.py'
 if (Test-Path $clipPy) {
     Write-OK ('Project already exists at ' + $ProjectDir)
@@ -569,7 +569,7 @@ Refresh-Path
 if (Test-CommandExists 'ffmpeg') {
     Write-OK 'FFmpeg already on PATH'
 } else {
-    $ffmpegDir = Join-Path $ClipperHome 'ffmpeg'
+    $ffmpegDir = Join-Path $GlideKitHome 'ffmpeg'
     $ffmpegExe = Join-Path $ffmpegDir 'ffmpeg.exe'
     if (Test-Path $ffmpegExe) {
         Add-ToPath $ffmpegDir
@@ -657,7 +657,7 @@ try {
 }
 
 # --- Write completion marker ---
-$marker = Join-Path $ClipperHome 'bootstrap-complete'
+$marker = Join-Path $GlideKitHome 'bootstrap-complete'
 Set-Content -Path $marker -Value (Get-Date -Format o) -Force
 Write-OK 'Bootstrap complete marker written'
 
@@ -667,7 +667,7 @@ try {
     if (-not (Test-Path $RegKey)) {
         New-Item -Path $RegKey -Force | Out-Null
     }
-    Set-ItemProperty -Path $RegKey -Name 'ClipperHome' -Value $ClipperHome
+    Set-ItemProperty -Path $RegKey -Name 'GlideKitHome' -Value $GlideKitHome
     Set-ItemProperty -Path $RegKey -Name 'ProjectDir' -Value $ProjectDir
     Set-ItemProperty -Path $RegKey -Name 'InstalledDate' -Value (Get-Date -Format o)
     Write-OK ('Registry: ' + $RegKey)
@@ -681,7 +681,7 @@ Write-Host '========================================'
 Write-Host '  Bootstrap complete!'
 Write-Host '========================================'
 Write-Host ''
-Write-Host ('  Clipper home:  ' + $ClipperHome)
+Write-Host ('  GlideKit home: ' + $GlideKitHome)
 Write-Host ('  Project:       ' + $ProjectDir)
 Write-Host ''
 
