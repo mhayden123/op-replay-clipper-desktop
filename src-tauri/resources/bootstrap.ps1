@@ -5,9 +5,11 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File bootstrap.ps1
 #   powershell -ExecutionPolicy Bypass -File bootstrap.ps1 -Silent
+#   powershell -ExecutionPolicy Bypass -File bootstrap.ps1 -Clean
 
 param(
-    [switch]$Silent
+    [switch]$Silent,
+    [switch]$Clean
 )
 
 # Guarantee logging from the very first line
@@ -143,6 +145,22 @@ if (-not $netOk) {
     Write-Host '  Check your network settings and try again.'
     Stop-Transcript
     exit 1
+}
+
+# --- Clean install ---
+if ($Clean) {
+    Write-Step 'Clean install requested'
+    $cleanTargets = @(
+        $ProjectDir,
+        (Join-Path $ClipperHome 'bootstrap-complete')
+    )
+    foreach ($target in $cleanTargets) {
+        if (Test-Path $target) {
+            Write-Host ('  Removing: ' + $target)
+            Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-OK 'Clean slate prepared'
 }
 
 # --- Create directories ---

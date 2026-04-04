@@ -64,18 +64,29 @@
   StrCpy $2 "$INSTDIR\resources\bootstrap.ps1"
 
   RunBootstrapAlt:
-  DetailPrint "Running: $2"
+
+  ; Ask user if they want a clean install (re-download everything)
+  StrCpy $3 ""
+  IfFileExists "$LOCALAPPDATA\op-replay-clipper\op-replay-clipper-native\clip.py" 0 SkipCleanPrompt
+    MessageBox MB_YESNO|MB_ICONQUESTION "An existing installation was found.$\r$\n$\r$\nPerform a clean install? (re-downloads all files)$\r$\nChoose No for a quick update." IDYES DoClean
+    Goto SkipCleanPrompt
+  DoClean:
+    StrCpy $3 "-Clean"
+    DetailPrint "Clean install selected."
+  SkipCleanPrompt:
+
+  DetailPrint "Running: $2 $3"
   FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
   FileSeek $1 0 END
   FileWrite $1 "$\r$\nLaunching PowerShell:$\r$\n"
   FileWrite $1 "  Script: $2$\r$\n"
-  FileWrite $1 "  Command: powershell.exe -NoProfile -ExecutionPolicy Bypass -File $\"$2$\"$\r$\n"
+  FileWrite $1 "  Clean: $3$\r$\n"
   FileClose $1
 
   ; Run PowerShell with output captured to the NSIS log.
   ; -NoProfile avoids loading user PS profile (faster, fewer errors).
   ; The bootstrap script uses Start-Transcript internally for its own log.
-  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$2"'
+  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$2" $3'
   Pop $0
 
   ; Record the exit code

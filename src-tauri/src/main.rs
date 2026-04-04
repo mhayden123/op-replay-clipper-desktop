@@ -394,26 +394,30 @@ fn download_bootstrap_script() -> Option<PathBuf> {
 
 /// Run the bootstrap.ps1 script with live progress updates to the window.
 #[cfg(target_os = "windows")]
-fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path) -> bool {
+fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, clean: bool) -> bool {
     use std::io::BufRead;
 
     eprintln!("[bootstrap-run] Script: {:?}", script);
     eprintln!("[bootstrap-run] Script exists: {}", script.exists());
     eprintln!("[bootstrap-run] Script size: {:?}", fs::metadata(script).map(|m| m.len()));
-    send_status(window, "Setting up OP Replay Clipper...");
+    eprintln!("[bootstrap-run] Clean: {}", clean);
+    send_status(window, if clean { "Clean install - re-downloading all files..." } else { "Setting up OP Replay Clipper..." });
 
     fs::create_dir_all(data_dir()).ok();
 
-    // Use -Command with explicit script invocation to avoid path quoting issues
     let script_path = script.to_string_lossy().to_string();
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        script_path,
+    ];
+    if clean {
+        args.push("-Clean".to_string());
+    }
     let result = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            &script_path,
-        ])
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
@@ -482,6 +486,12 @@ fn send_error(window: &tauri::WebviewWindow, msg: &str) {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    // Parse --clean flag before Tauri consumes args
+    let clean_install = std::env::args().any(|a| a == "--clean");
+    if clean_install {
+        eprintln!("[main] --clean flag detected, will force clean bootstrap");
+    }
+
     let state = AppState {
         server_process: Mutex::new(None),
     };
@@ -495,7 +505,7 @@ fn main() {
                 stop_server(&mut proc);
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -513,6 +523,19 @@ fn main() {
             thread::spawn(move || {
                 let win = window;
 
+                // --- Phase 0: Clean install if requested via --clean ---
+                #[cfg(target_os = "windows")]
+                if clean_install {
+                    eprintln!("[startup] --clean: deleting project directory");
+                    send_status(&win, "Clean install - removing old files...");
+                    let project = data_dir().join("op-replay-clipper-native");
+                    if project.exists() {
+                        let _ = fs::remove_dir_all(&project);
+                    }
+                    let marker = data_dir().join("bootstrap-complete");
+                    let _ = fs::remove_file(&marker);
+                }
+
                 // --- Phase 1: Ensure environment is ready ---
                 send_status(&win, "Checking environment...");
                 let env_result = check_environment();
@@ -529,9 +552,13 @@ fn main() {
                             "Environment not ready ({}), starting bootstrap...",
                             reason
                         );
-                        send_status(&win, "First-time setup — this takes a few minutes...");
+                        send_status(&win, if clean_install {
+                            "Clean install - re-downloading all files..."
+                        } else {
+                            "First-time setup - this takes a few minutes..."
+                        });
 
-                        // Find the bootstrap script: bundled resources → download from GitHub
+                        // Find the bootstrap script: bundled resources -> download from GitHub
                         let script = find_bootstrap_script(&resource_path)
                             .or_else(|| {
                                 eprintln!("[startup] Bundled script not found, downloading...");
@@ -540,7 +567,7 @@ fn main() {
                             });
 
                         if let Some(ref script_path) = script {
-                            if !run_bootstrap(&win, script_path) {
+                            if !run_bootstrap(&win, script_path, clean_install) {
                                 send_error(
                                     &win,
                                     "Setup failed. Check the log at:\n%LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
