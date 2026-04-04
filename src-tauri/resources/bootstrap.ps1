@@ -349,12 +349,31 @@ function Find-UvOnDisk {
     }
     foreach ($dir in $searchPaths) {
         $uvExe = Join-Path $dir 'uv.exe'
+        Write-Host ('  Checking: ' + $uvExe)
         if (Test-Path $uvExe) {
-            Write-Host ('  Found uv at: ' + $dir)
+            Write-Host ('  FOUND uv at: ' + $dir)
             Add-ToPath $dir
             return $true
         }
     }
+
+    # Last resort: scan all Python Scripts directories under AppData
+    Write-Host '  Scanning AppData for uv.exe...'
+    $appDataDirs = @($env:APPDATA, $env:LOCALAPPDATA)
+    foreach ($base in $appDataDirs) {
+        if (-not $base) { continue }
+        $pyDir = Join-Path $base 'Python'
+        if (Test-Path $pyDir) {
+            $found = Get-ChildItem -Path $pyDir -Recurse -Filter 'uv.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+                $foundDir = $found.DirectoryName
+                Write-Host ('  FOUND uv via scan: ' + $foundDir)
+                Add-ToPath $foundDir
+                return $true
+            }
+        }
+    }
+
     return $false
 }
 
@@ -384,18 +403,46 @@ if (Test-CommandExists 'uv') {
         Write-Warn ('uv official installer failed: ' + $_)
     }
 
-    # Fallback: pip install --user (do NOT use 2>&1 — pip writes notices to stderr)
+    # Fallback: pip install --user
     if ((-not $uvInstalled) -and $pythonCmd) {
         try {
             Write-Host '  Installing uv via pip...'
             $r = Invoke-Native $pythonCmd @('-m', 'pip', 'install', '--user', 'uv')
             Write-Host ('  pip exit code: ' + $r.ExitCode)
             if ($r.Output) { Write-Host ('  pip output: ' + $r.Output) }
-            Refresh-Path
-            if (Test-CommandExists 'uv') {
-                $uvInstalled = $true
-            } else {
-                $uvInstalled = Find-UvOnDisk
+
+            # Ask Python where pip --user scripts actually go
+            $r2 = Invoke-Native $pythonCmd @('-c', 'import sysconfig; print(sysconfig.get_path("scripts", "nt_user"))')
+            if ($r2.ExitCode -eq 0 -and $r2.Output) {
+                $pipScriptsDir = $r2.Output.Trim()
+                Write-Host ('  pip --user scripts dir: ' + $pipScriptsDir)
+                if (Test-Path (Join-Path $pipScriptsDir 'uv.exe')) {
+                    Add-ToPath $pipScriptsDir
+                    $uvInstalled = $true
+                }
+            }
+
+            # Also try the site module approach
+            if (-not $uvInstalled) {
+                $r3 = Invoke-Native $pythonCmd @('-m', 'site', '--user-base')
+                if ($r3.ExitCode -eq 0 -and $r3.Output) {
+                    $userScripts = Join-Path $r3.Output.Trim() 'Scripts'
+                    Write-Host ('  site --user-base scripts: ' + $userScripts)
+                    if (Test-Path (Join-Path $userScripts 'uv.exe')) {
+                        Add-ToPath $userScripts
+                        $uvInstalled = $true
+                    }
+                }
+            }
+
+            # Broad search if still not found
+            if (-not $uvInstalled) {
+                Refresh-Path
+                if (Test-CommandExists 'uv') {
+                    $uvInstalled = $true
+                } else {
+                    $uvInstalled = Find-UvOnDisk
+                }
             }
             if ($uvInstalled) {
                 Write-OK 'uv installed via pip'
