@@ -83,6 +83,34 @@ function Add-ToPath {
     }
 }
 
+function Invoke-Native {
+    # Run an external command, capture stdout, ignore stderr noise.
+    # PowerShell 5.1 treats ANY stderr output as a NativeCommandError
+    # when using 2>&1, so we avoid that entirely.
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+    $pinfo.FileName = $Command
+    $pinfo.Arguments = $Arguments -join ' '
+    $pinfo.RedirectStandardOutput = $true
+    $pinfo.RedirectStandardError = $true
+    $pinfo.UseShellExecute = $false
+    $pinfo.CreateNoWindow = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $pinfo
+    $p.Start() | Out-Null
+    $stdout = $p.StandardOutput.ReadToEnd()
+    $stderr = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    return @{
+        Output = $stdout.Trim()
+        Error = $stderr.Trim()
+        ExitCode = $p.ExitCode
+    }
+}
+
 # Reset checkpoints
 if (Test-Path $CheckpointFile) { Remove-Item $CheckpointFile -Force }
 New-Item -ItemType File -Force -Path $CheckpointFile | Out-Null
@@ -121,8 +149,8 @@ Write-OK ('Directories created: ' + $ClipperHome)
 Write-Step 'Checking Git'
 Refresh-Path
 if (Test-CommandExists 'git') {
-    $gitVer = git --version 2>&1
-    Write-OK ('Git already installed: ' + $gitVer)
+    $r = Invoke-Native 'git' @('--version')
+    Write-OK ('Git already installed: ' + $r.Output)
 } else {
     Write-Step 'Installing Git'
     $gitInstalled = $false
@@ -131,8 +159,8 @@ if (Test-CommandExists 'git') {
     if (Test-CommandExists 'winget') {
         Write-Host '  Trying winget...'
         try {
-            $out = winget install Git.Git --silent --accept-package-agreements --accept-source-agreements 2>&1
-            Write-Host ('  winget output: ' + $out)
+            $r = Invoke-Native 'winget' @('install', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+            Write-Host ('  winget exit code: ' + $r.ExitCode)
             Refresh-Path
             if (-not (Test-CommandExists 'git')) {
                 $gitCmdDir = 'C:\Program Files\Git\cmd'
@@ -192,8 +220,8 @@ $pythonCmd = $null
 foreach ($cmd in @('python', 'python3', 'py')) {
     if (Test-CommandExists $cmd) {
         try {
-            $verOut = & $cmd --version 2>&1
-            $verStr = [string]$verOut
+            $r = Invoke-Native $cmd @('--version')
+            $verStr = $r.Output
             if ($verStr -match '(\d+)\.(\d+)') {
                 $major = [int]$Matches[1]
                 $minor = [int]$Matches[2]
@@ -207,8 +235,8 @@ foreach ($cmd in @('python', 'python3', 'py')) {
 }
 
 if ($pythonCmd) {
-    $pyVer = & $pythonCmd --version 2>&1
-    Write-OK ('Python already installed: ' + $pyVer)
+    $r = Invoke-Native $pythonCmd @('--version')
+    Write-OK ('Python already installed: ' + $r.Output)
 } else {
     Write-Step 'Installing Python 3.12'
     $pyInstalled = $false
@@ -217,8 +245,8 @@ if ($pythonCmd) {
     if (Test-CommandExists 'winget') {
         Write-Host '  Trying winget...'
         try {
-            $out = winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements 2>&1
-            Write-Host ('  winget output: ' + $out)
+            $r = Invoke-Native 'winget' @('install', 'Python.Python.3.12', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+            Write-Host ('  winget exit code: ' + $r.ExitCode)
             Refresh-Path
             foreach ($cmd in @('python', 'python3', 'py')) {
                 if (Test-CommandExists $cmd) {
@@ -292,9 +320,40 @@ if ($pythonCmd) {
 # --- Install uv ---
 Write-Step 'Checking uv'
 Refresh-Path
+
+# Helper: search common uv install locations and add to PATH if found
+function Find-UvOnDisk {
+    $searchPaths = @(
+        (Join-Path $env:USERPROFILE '.local\bin'),
+        (Join-Path $env:USERPROFILE '.cargo\bin'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\Scripts'),
+        (Join-Path $env:APPDATA 'Python\Python312\Scripts'),
+        (Join-Path $env:APPDATA 'Python\Scripts'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\Scripts')
+    )
+    # Also check pip --user site scripts
+    if ($pythonCmd) {
+        try {
+            $r = Invoke-Native $pythonCmd @('-m', 'site', '--user-base')
+            if ($r.ExitCode -eq 0 -and $r.Output) {
+                $searchPaths += (Join-Path $r.Output 'Scripts')
+            }
+        } catch {}
+    }
+    foreach ($dir in $searchPaths) {
+        $uvExe = Join-Path $dir 'uv.exe'
+        if (Test-Path $uvExe) {
+            Write-Host ('  Found uv at: ' + $dir)
+            Add-ToPath $dir
+            return $true
+        }
+    }
+    return $false
+}
+
 if (Test-CommandExists 'uv') {
-    $uvVer = uv --version 2>&1
-    Write-OK ('uv already installed: ' + $uvVer)
+    $r = Invoke-Native 'uv' @('--version')
+    Write-OK ('uv already installed: ' + $r.Output)
 } else {
     Write-Step 'Installing uv'
     $uvInstalled = $false
@@ -306,30 +365,32 @@ if (Test-CommandExists 'uv') {
         $uvScript = Invoke-WebRequest -Uri 'https://astral.sh/uv/install.ps1' -UseBasicParsing
         Invoke-Expression $uvScript.Content
         Refresh-Path
-        $uvLocalBin = Join-Path $env:USERPROFILE '.local\bin'
-        $uvCargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-        if (Test-Path (Join-Path $uvLocalBin 'uv.exe')) {
-            Add-ToPath $uvLocalBin
-        }
-        if (Test-Path (Join-Path $uvCargoBin 'uv.exe')) {
-            Add-ToPath $uvCargoBin
-        }
         if (Test-CommandExists 'uv') {
             $uvInstalled = $true
+        } else {
+            $uvInstalled = Find-UvOnDisk
+        }
+        if ($uvInstalled) {
             Write-OK 'uv installed via official installer'
         }
     } catch {
         Write-Warn ('uv official installer failed: ' + $_)
     }
 
-    # Fallback: pip install
+    # Fallback: pip install --user (do NOT use 2>&1 — pip writes notices to stderr)
     if ((-not $uvInstalled) -and $pythonCmd) {
         try {
             Write-Host '  Installing uv via pip...'
-            & $pythonCmd -m pip install --user uv 2>&1
+            $r = Invoke-Native $pythonCmd @('-m', 'pip', 'install', '--user', 'uv')
+            Write-Host ('  pip exit code: ' + $r.ExitCode)
+            if ($r.Output) { Write-Host ('  pip output: ' + $r.Output) }
             Refresh-Path
             if (Test-CommandExists 'uv') {
                 $uvInstalled = $true
+            } else {
+                $uvInstalled = Find-UvOnDisk
+            }
+            if ($uvInstalled) {
                 Write-OK 'uv installed via pip'
             }
         } catch {
@@ -338,7 +399,7 @@ if (Test-CommandExists 'uv') {
     }
 
     if (-not $uvInstalled) {
-        Write-Fail 'Could not install uv'
+        Write-Fail 'Could not install uv (searched all known locations)'
         Stop-Transcript
         exit 1
     }
@@ -351,8 +412,8 @@ if (Test-Path $clipPy) {
     Write-OK ('Project already exists at ' + $ProjectDir)
     try {
         Push-Location $ProjectDir
-        $pullOut = git pull --ff-only 2>&1
-        Write-Host ('  git pull: ' + $pullOut)
+        $r = Invoke-Native 'git' @('pull', '--ff-only')
+        Write-Host ('  git pull: ' + $r.Output)
         Pop-Location
         Write-OK 'Updated to latest'
     } catch {
@@ -362,8 +423,9 @@ if (Test-Path $clipPy) {
 } else {
     Write-Step 'Cloning op-replay-clipper-native'
     try {
-        $cloneOut = git clone 'https://github.com/mhayden123/op-replay-clipper-native.git' $ProjectDir 2>&1
-        Write-Host ('  ' + $cloneOut)
+        $r = Invoke-Native 'git' @('clone', 'https://github.com/mhayden123/op-replay-clipper-native.git', $ProjectDir)
+        Write-Host ('  git clone exit code: ' + $r.ExitCode)
+        if ($r.Output) { Write-Host ('  ' + $r.Output) }
         if (Test-Path (Join-Path $ProjectDir 'clip.py')) {
             Write-OK ('Cloned to ' + $ProjectDir)
         } else {
@@ -382,8 +444,9 @@ if (Test-Path $clipPy) {
 Write-Step 'Installing Python dependencies'
 try {
     Push-Location $ProjectDir
-    $syncOut = uv sync 2>&1
-    Write-Host ('  ' + $syncOut)
+    $r = Invoke-Native 'uv' @('sync')
+    Write-Host ('  uv sync exit code: ' + $r.ExitCode)
+    if ($r.Output) { Write-Host ('  ' + $r.Output) }
     Pop-Location
     Write-OK 'Python dependencies installed'
 } catch {
@@ -438,9 +501,9 @@ if (Test-CommandExists 'ffmpeg') {
 # --- GPU check (non-fatal) ---
 Write-Step 'Checking GPU'
 try {
-    $nvsmi = nvidia-smi --query-gpu=name --format=csv,noheader 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-OK ('NVIDIA GPU: ' + $nvsmi)
+    $r = Invoke-Native 'nvidia-smi' @('--query-gpu=name', '--format=csv,noheader')
+    if ($r.ExitCode -eq 0) {
+        Write-OK ('NVIDIA GPU: ' + $r.Output)
     } else {
         Write-Warn 'No NVIDIA GPU. CPU rendering will be used (slower but works fine).'
     }
@@ -451,9 +514,8 @@ try {
 # --- WSL check (non-fatal) ---
 Write-Step 'Checking WSL'
 try {
-    $wslOut = wsl.exe --list --verbose 2>&1
-    $wslStr = [string]$wslOut
-    if (($LASTEXITCODE -eq 0) -and ($wslStr -match 'Running')) {
+    $r = Invoke-Native 'wsl.exe' @('--list', '--verbose')
+    if (($r.ExitCode -eq 0) -and ($r.Output -match 'Running')) {
         Write-OK 'WSL available - UI render types supported'
     } else {
         Write-Warn 'WSL not running. UI render types (ui, ui-alt, driver-debug) unavailable.'
