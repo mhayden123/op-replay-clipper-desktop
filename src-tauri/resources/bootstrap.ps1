@@ -12,8 +12,22 @@ param(
     [switch]$Clean
 )
 
+# Registry key for tracking install locations
+$RegKey = 'HKCU:\Software\OP Replay Clipper'
+
+# Determine ClipperHome - check registry first, then default
+$ClipperHome = $null
+try {
+    $regVal = Get-ItemProperty -Path $RegKey -Name 'ClipperHome' -ErrorAction SilentlyContinue
+    if ($regVal -and $regVal.ClipperHome -and (Test-Path $regVal.ClipperHome)) {
+        $ClipperHome = $regVal.ClipperHome
+    }
+} catch {}
+if (-not $ClipperHome) {
+    $ClipperHome = Join-Path $env:LOCALAPPDATA 'op-replay-clipper'
+}
+
 # Guarantee logging from the very first line
-$ClipperHome = Join-Path $env:LOCALAPPDATA 'op-replay-clipper'
 if (-not (Test-Path $ClipperHome)) {
     New-Item -ItemType Directory -Force -Path $ClipperHome | Out-Null
 }
@@ -150,15 +164,28 @@ if (-not $netOk) {
 # --- Clean install ---
 if ($Clean) {
     Write-Step 'Clean install requested'
-    $cleanTargets = @(
-        $ProjectDir,
-        (Join-Path $ClipperHome 'bootstrap-complete')
-    )
-    foreach ($target in $cleanTargets) {
-        if (Test-Path $target) {
-            Write-Host ('  Removing: ' + $target)
-            Remove-Item -Path $target -Recurse -Force -ErrorAction SilentlyContinue
+    # Read existing location from registry before deleting
+    $cleanDir = $ClipperHome
+    try {
+        $regVal = Get-ItemProperty -Path $RegKey -Name 'ClipperHome' -ErrorAction SilentlyContinue
+        if ($regVal -and $regVal.ClipperHome) {
+            $cleanDir = $regVal.ClipperHome
         }
+    } catch {}
+    # Delete the entire data directory
+    if (Test-Path $cleanDir) {
+        Write-Host ('  Removing entire data directory: ' + $cleanDir)
+        # Stop transcript before deleting the dir that contains the log
+        Stop-Transcript
+        Remove-Item -Path $cleanDir -Recurse -Force -ErrorAction SilentlyContinue
+        # Recreate and restart transcript
+        New-Item -ItemType Directory -Force -Path $ClipperHome | Out-Null
+        $LogFile = Join-Path $ClipperHome 'bootstrap-app.log'
+        Start-Transcript -Path $LogFile -Force
+    }
+    # Clean registry
+    if (Test-Path $RegKey) {
+        Remove-Item -Path $RegKey -Force -ErrorAction SilentlyContinue
     }
     Write-OK 'Clean slate prepared'
 }
@@ -633,6 +660,20 @@ try {
 $marker = Join-Path $ClipperHome 'bootstrap-complete'
 Set-Content -Path $marker -Value (Get-Date -Format o) -Force
 Write-OK 'Bootstrap complete marker written'
+
+# --- Write registry keys ---
+Write-Step 'Writing registry keys'
+try {
+    if (-not (Test-Path $RegKey)) {
+        New-Item -Path $RegKey -Force | Out-Null
+    }
+    Set-ItemProperty -Path $RegKey -Name 'ClipperHome' -Value $ClipperHome
+    Set-ItemProperty -Path $RegKey -Name 'ProjectDir' -Value $ProjectDir
+    Set-ItemProperty -Path $RegKey -Name 'InstalledDate' -Value (Get-Date -Format o)
+    Write-OK ('Registry: ' + $RegKey)
+} catch {
+    Write-Warn ('Registry write failed: ' + $_)
+}
 
 # --- Summary ---
 Write-Host ''

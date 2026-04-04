@@ -43,6 +43,39 @@ fn data_dir() -> PathBuf {
     dir
 }
 
+/// Read a string value from the app's registry key (Windows only).
+/// Key: HKCU\Software\OP Replay Clipper\{name}
+#[cfg(target_os = "windows")]
+fn read_registry_string(name: &str) -> Option<String> {
+    let output = Command::new("reg.exe")
+        .args([
+            "query",
+            r"HKCU\Software\OP Replay Clipper",
+            "/v",
+            name,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // reg.exe output: "    ValueName    REG_SZ    ValueData"
+    for line in text.lines() {
+        if line.contains("REG_SZ") {
+            if let Some(pos) = line.find("REG_SZ") {
+                let value = line[pos + 6..].trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Locate the clipper project directory (must contain clip.py).
 fn find_clipper_project() -> Option<PathBuf> {
     // Explicit override
@@ -54,6 +87,18 @@ fn find_clipper_project() -> Option<PathBuf> {
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Windows: check registry first (most reliable — set by bootstrap.ps1)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(reg_path) = read_registry_string("ProjectDir") {
+            let p = PathBuf::from(&reg_path);
+            eprintln!("[find-project] Registry ProjectDir: {:?} exists={}", p, p.join("clip.py").exists());
+            if p.join("clip.py").exists() {
+                return Some(p);
+            }
+        }
+    }
 
     // Sibling of the running executable
     if let Ok(exe) = std::env::current_exe() {
@@ -80,7 +125,7 @@ fn find_clipper_project() -> Option<PathBuf> {
         candidates.push(home.join("op-replay-clipper-native"));
     }
 
-    // Windows: %LOCALAPPDATA%\op-replay-clipper\ (where NSIS bootstrap puts it)
+    // Windows: %LOCALAPPDATA%\op-replay-clipper\ (default bootstrap location)
     if cfg!(windows) {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             candidates.push(

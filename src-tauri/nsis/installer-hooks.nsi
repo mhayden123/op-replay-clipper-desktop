@@ -1,6 +1,5 @@
-; OP Replay Clipper — NSIS Installer Hooks
-; Runs bootstrap.ps1 during install, cleans up on uninstall.
-; All output logged to %LOCALAPPDATA%\op-replay-clipper\install.log
+; OP Replay Clipper - NSIS Installer Hooks
+; Uses registry key HKCU\Software\OP Replay Clipper to track install paths.
 
 !macro customInstall
   SetDetailsPrint both
@@ -12,52 +11,33 @@
   ; Create log directory
   CreateDirectory "$LOCALAPPDATA\op-replay-clipper"
 
-  ; Start the log file with diagnostic info
+  ; Log diagnostic info
   FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" w
   FileWrite $1 "=== NSIS Install Log ===$\r$\n"
-  FileWrite $1 "Date: ${__DATE__} ${__TIME__}$\r$\n"
   FileWrite $1 "INSTDIR: $INSTDIR$\r$\n"
   FileWrite $1 "LOCALAPPDATA: $LOCALAPPDATA$\r$\n"
-  FileWrite $1 "WINDIR: $WINDIR$\r$\n"
   FileWrite $1 "$\r$\n"
 
-  ; Check if bootstrap.ps1 exists at the expected path
+  ; Check if bootstrap.ps1 exists
   FileWrite $1 "Looking for bootstrap.ps1...$\r$\n"
   FileWrite $1 "  Checking: $INSTDIR\resources\bootstrap.ps1$\r$\n"
   IfFileExists "$INSTDIR\resources\bootstrap.ps1" 0 ScriptNotInResources
-    FileWrite $1 "  FOUND: $INSTDIR\resources\bootstrap.ps1$\r$\n"
+    FileWrite $1 "  FOUND$\r$\n"
     Goto RunBootstrap
 
   ScriptNotInResources:
   FileWrite $1 "  NOT FOUND$\r$\n"
   FileWrite $1 "  Checking: $INSTDIR\bootstrap.ps1$\r$\n"
-  IfFileExists "$INSTDIR\bootstrap.ps1" 0 ScriptNotInRoot
-    FileWrite $1 "  FOUND: $INSTDIR\bootstrap.ps1$\r$\n"
+  IfFileExists "$INSTDIR\bootstrap.ps1" 0 ScriptNotFound
+    FileWrite $1 "  FOUND$\r$\n"
     StrCpy $2 "$INSTDIR\bootstrap.ps1"
     Goto RunBootstrapAlt
 
-  ScriptNotInRoot:
+  ScriptNotFound:
   FileWrite $1 "  NOT FOUND$\r$\n"
-  FileWrite $1 "$\r$\n"
-
-  ; List what IS in the install directory for debugging
-  FileWrite $1 "Contents of $INSTDIR:$\r$\n"
+  FileWrite $1 "bootstrap.ps1 not found. App will set up on first launch.$\r$\n"
   FileClose $1
-  nsExec::ExecToLog 'cmd.exe /c "dir /b "$INSTDIR" >> "$LOCALAPPDATA\op-replay-clipper\install.log" 2>&1"'
-  Pop $0
-  FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
-  FileSeek $1 0 END
-  FileWrite $1 "$\r$\nContents of $INSTDIR\resources:$\r$\n"
-  FileClose $1
-  nsExec::ExecToLog 'cmd.exe /c "dir /b "$INSTDIR\resources" >> "$LOCALAPPDATA\op-replay-clipper\install.log" 2>&1"'
-  Pop $0
-
-  FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
-  FileSeek $1 0 END
-  FileWrite $1 "$\r$\nbootstrap.ps1 not found in any location.$\r$\n"
-  FileWrite $1 "The app will download and run it on first launch.$\r$\n"
-  FileClose $1
-  DetailPrint "WARNING: bootstrap.ps1 not found — app will set up on first launch."
+  DetailPrint "WARNING: bootstrap.ps1 not found. App will set up on first launch."
   Goto BootstrapDone
 
   RunBootstrap:
@@ -65,34 +45,29 @@
 
   RunBootstrapAlt:
 
-  ; Ask user if they want a clean install (re-download everything)
+  ; Detect previous installation — if exists, always run -Clean for a fresh state
   StrCpy $3 ""
-  IfFileExists "$LOCALAPPDATA\op-replay-clipper\op-replay-clipper-native\clip.py" 0 SkipCleanPrompt
-    MessageBox MB_YESNO|MB_ICONQUESTION "An existing installation was found.$\r$\n$\r$\nPerform a clean install? (re-downloads all files)$\r$\nChoose No for a quick update." IDYES DoClean
-    Goto SkipCleanPrompt
-  DoClean:
+  IfFileExists "$LOCALAPPDATA\op-replay-clipper\op-replay-clipper-native\clip.py" 0 NoPreviousInstall
     StrCpy $3 "-Clean"
-    DetailPrint "Clean install selected."
-  SkipCleanPrompt:
+    DetailPrint "Previous installation detected. Running clean reinstall."
+  NoPreviousInstall:
 
   DetailPrint "Running: $2 $3"
   FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
   FileSeek $1 0 END
-  FileWrite $1 "$\r$\nLaunching PowerShell:$\r$\n"
-  FileWrite $1 "  Script: $2$\r$\n"
-  FileWrite $1 "  Clean: $3$\r$\n"
+  FileWrite $1 "Launching PowerShell: $2 $3$\r$\n"
   FileClose $1
 
-  ; Run PowerShell with output captured to the NSIS log.
-  ; -NoProfile avoids loading user PS profile (faster, fewer errors).
-  ; The bootstrap script uses Start-Transcript internally for its own log.
+  ; Write registry key for InstallPath (app exe location)
+  WriteRegStr HKCU "Software\OP Replay Clipper" "InstallPath" "$INSTDIR"
+
   nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$2" $3'
   Pop $0
 
-  ; Record the exit code
+  ; Log exit code
   FileOpen $1 "$LOCALAPPDATA\op-replay-clipper\install.log" a
   FileSeek $1 0 END
-  FileWrite $1 "$\r$\nPowerShell exit code: $0$\r$\n"
+  FileWrite $1 "PowerShell exit code: $0$\r$\n"
   FileClose $1
 
   ${If} $0 == 0
@@ -112,15 +87,43 @@
 
 !macro customUninstall
   SetDetailsPrint both
-  DetailPrint "Cleaning up OP Replay Clipper data..."
 
-  RMDir /r "$LOCALAPPDATA\op-replay-clipper"
+  ; Confirmation dialog
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+    "Remove all OP Replay Clipper data?$\r$\n$\r$\nThis deletes downloaded routes, rendered clips, openpilot data, and all backend files.$\r$\n$\r$\nChoose No to keep your data." \
+    IDYES DoRemoveData
+  Goto SkipDataRemoval
 
-  ${If} ${Errors}
-    DetailPrint "Note: Some files could not be removed (may be in use)."
-  ${Else}
-    DetailPrint "Clipper data removed."
+  DoRemoveData:
+
+  ; Read ClipperHome from registry
+  ReadRegStr $0 HKCU "Software\OP Replay Clipper" "ClipperHome"
+
+  ${If} $0 != ""
+    DetailPrint "Removing data directory (from registry): $0"
+    RMDir /r "$0"
   ${EndIf}
+
+  ; Also check common fallback locations in case registry is missing
+  IfFileExists "$LOCALAPPDATA\op-replay-clipper\*.*" 0 +3
+    DetailPrint "Removing: $LOCALAPPDATA\op-replay-clipper"
+    RMDir /r "$LOCALAPPDATA\op-replay-clipper"
+
+  IfFileExists "$PROFILE\.op-replay-clipper\*.*" 0 +3
+    DetailPrint "Removing: $PROFILE\.op-replay-clipper"
+    RMDir /r "$PROFILE\.op-replay-clipper"
+
+  IfFileExists "$APPDATA\op-replay-clipper\*.*" 0 +3
+    DetailPrint "Removing: $APPDATA\op-replay-clipper"
+    RMDir /r "$APPDATA\op-replay-clipper"
+
+  DetailPrint "Data removed."
+
+  SkipDataRemoval:
+
+  ; Always clean up registry
+  DeleteRegKey HKCU "Software\OP Replay Clipper"
+  DetailPrint "Registry cleaned."
 
   DetailPrint ""
 !macroend
