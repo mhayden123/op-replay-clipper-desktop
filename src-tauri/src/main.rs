@@ -1,7 +1,7 @@
-// OP Replay Clipper — Tauri Desktop App (Native Edition)
+// OP Replay Clipper -- Tauri Desktop App
 //
 // Manages a local FastAPI server (uvicorn) as a child process.
-// No Docker dependency — the rendering pipeline runs natively.
+// On Windows, auto-bootstraps Python/Git/uv/FFmpeg on first launch.
 //
 // Platform support:
 //   Linux:   Full support (all render types, NVIDIA GPU)

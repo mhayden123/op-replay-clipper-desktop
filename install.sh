@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# OP Replay Clipper Desktop — Installer
-# Sets up Tauri build dependencies and ensures the clipper Docker images are ready.
+# OP Replay Clipper Desktop -- Build from source
+# Sets up Tauri build dependencies and builds the desktop app.
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
 ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$*"; }
 fail()  { printf '\033[1;31m[FAIL]\033[0m  %s\n' "$*"; exit 1; }
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="${CLIPPER_REPO_DIR:-$(dirname "$APP_DIR")/op-replay-clipper}"
 
 # 1. Check Rust
 if ! command -v cargo &>/dev/null; then
@@ -27,10 +26,8 @@ ok "Node.js $(node --version) installed"
 if [[ "$(uname)" == "Linux" ]]; then
     info "Checking Tauri system dependencies..."
     if [ -f /run/ostree-booted ]; then
-        # Immutable distro (Bazzite, Fedora Silverblue, etc.)
-        # Dependencies must be pre-installed via rpm-ostree.
         if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-            ok "Tauri system dependencies found (immutable OS — install via rpm-ostree if missing)"
+            ok "Tauri system dependencies found (immutable OS)"
         else
             fail "WebKitGTK 4.1 not found. Install with: rpm-ostree install webkit2gtk4.1-devel openssl-devel libxdo-devel librsvg2-devel && systemctl reboot"
         fi
@@ -51,20 +48,8 @@ cd "$APP_DIR"
 npm install
 ok "npm dependencies installed"
 
-# 5. Ensure the main clipper repo is set up
-if [ ! -f "$REPO_DIR/docker-compose.yml" ]; then
-    info "Cloning main clipper repo..."
-    git clone --depth 1 https://github.com/mhayden123/op-replay-clipper.git "$REPO_DIR"
-fi
-
-if ! docker image inspect op-replay-clipper-render &>/dev/null 2>&1; then
-    info "Building Docker images..."
-    cd "$REPO_DIR" && bash install.sh
-fi
-
-# 6. Build the Tauri app
+# 5. Build the Tauri app
 info "Building Tauri desktop app..."
-cd "$APP_DIR"
 npm run tauri build
 
 ok "Build complete!"

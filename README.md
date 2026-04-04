@@ -1,67 +1,90 @@
-# OP Replay Clipper — Desktop App
+# OP Replay Clipper Desktop
 
-A native desktop application for rendering openpilot replay clips locally. Built with [Tauri](https://tauri.app/) for a lightweight ~13 MB binary.
+Native desktop app for rendering openpilot driving clips. Launches a local server and opens the clipper UI in a native window. No Docker required.
 
 ## Download
 
-Go to [Releases](https://github.com/mhayden123/op-replay-clipper-desktop/releases) and download the installer for your platform:
+Get the latest release for your platform from [Releases](https://github.com/mhayden123/op-replay-clipper-desktop/releases).
 
-| Platform | File | Notes |
-|----------|------|-------|
-| **Linux** | `.AppImage` | Portable, no install needed |
-| **Linux** | `.deb` | Debian/Ubuntu package |
-| **macOS** | `.dmg` | Drag to Applications |
-| **Windows** | `.msi` | Standard installer |
+| Platform | Format | Notes |
+|----------|--------|-------|
+| Linux | `.AppImage` | Portable, run anywhere |
+| Linux | `.deb` | Ubuntu, Debian, Mint, Pop!_OS |
+| Linux | `.rpm` | Fedora, RHEL |
+| macOS (Apple Silicon) | `.dmg` | M1/M2/M3/M4 |
+| macOS (Intel) | `.dmg` | Intel Macs |
+| Windows | `.exe` | NSIS installer (auto-bootstraps everything) |
+| Windows | `.msi` | MSI installer |
 
-## Prerequisites
+## How It Works
 
-- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** must be installed and running
-- **Linux / Windows**: NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for GPU-accelerated rendering
-- **macOS**: Renders using CPU only (no NVIDIA GPU required, but slower)
+The app is a lightweight native wrapper (~13 MB) around the [OP Replay Clipper](https://github.com/mhayden123/op-replay-clipper-native) web UI. On launch:
 
-## How it works
+1. Checks that the clipper backend is installed
+2. Starts the FastAPI server as a managed child process
+3. Opens the web UI in a native window
+4. Stops the server when you close the app
 
-1. **First launch**: The app pulls the required Docker images from GitHub Container Registry (~10 GB download, one-time)
-2. **Starts the web server**: Runs a local Docker container on port 7860
-3. **Opens the UI**: A native app window with the full rendering interface
-4. **On close**: Docker containers are automatically stopped and cleaned up
+## First Run
 
-No source code checkout or manual Docker setup required.
+### Windows
 
-## Render types
+Everything is automatic. The installer:
+- Installs Python 3.12, Git, uv, and FFmpeg
+- Clones the clipper project
+- Sets up dependencies
 
-| Type | Description |
-|------|-------------|
-| UI | openpilot UI replay with path, lanes, and metadata |
-| UI Alt | UI with steering wheel and confidence rail |
-| Driver Debug | Driver camera with DM telemetry |
-| Forward / Wide / Driver | Raw camera transcodes |
-| 360 | Spherical video from wide + driver cameras |
-| Fwd/Wide | Forward projected onto wide using camera calibration |
-| 360 Fwd/Wide | 8K 360 with forward projected onto wide |
+No terminal, no manual steps. First launch takes a few minutes for setup, then subsequent launches are instant.
 
-## Download sources
+For UI render types (ui, ui-alt, driver-debug), the app guides you through WSL installation with a step-by-step wizard.
 
-- **Comma Connect**: Download route data from comma's cloud servers (default)
-- **Local SSH**: Download directly from your comma device on the local network
+### Linux
 
-## Building from source
+Install the clipper backend first:
 
 ```bash
-# Install dependencies
-npm install
-
-# Development mode (hot reload)
-npm run tauri dev
-
-# Release build
-npm run tauri build
+git clone https://github.com/mhayden123/op-replay-clipper-native.git
+cd op-replay-clipper-native
+./install.sh
 ```
 
-### Build dependencies
+Then run the desktop app. It finds the clipper project automatically.
 
-- Rust (via [rustup](https://rustup.rs/))
-- Node.js 18+
-- **Linux**: `libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`
-- **macOS**: Xcode Command Line Tools
-- **Windows**: Visual Studio Build Tools with C++ workload
+### macOS (beta)
+
+Same as Linux -- install the backend first, then run the app.
+
+## Clean Install
+
+If something breaks:
+
+- **Windows installer**: reinstall the app (automatically cleans and re-downloads)
+- **App flag**: run `"OP Replay Clipper.exe" --clean` to reset
+- **Manual**: delete `%LOCALAPPDATA%\op-replay-clipper\` and relaunch
+
+## Building from Source
+
+```bash
+# Prerequisites
+# Linux: sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+# All platforms: Rust toolchain + Node.js 22+
+
+git clone https://github.com/mhayden123/op-replay-clipper-desktop.git
+cd op-replay-clipper-desktop
+npm install
+npm run tauri dev      # Development mode
+npm run tauri build    # Release build
+```
+
+## CLI Usage and Details
+
+For command-line usage, render type documentation, and technical details, see the [native clipper repo](https://github.com/mhayden123/op-replay-clipper-native).
+
+## Credits
+
+- [nelsonjchen](https://github.com/nelsonjchen) -- original op-replay-clipper
+- [commaai](https://github.com/commaai) -- openpilot
+
+## License
+
+See [LICENSE.md](https://github.com/mhayden123/op-replay-clipper/blob/main/LICENSE.md).
