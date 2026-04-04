@@ -669,6 +669,29 @@ fn main() {
 
                 // --- Phase 5: Redirect to web UI ---
                 let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
+
+                // --- Phase 6 (Windows): Check if WSL setup can continue ---
+                #[cfg(target_os = "windows")]
+                {
+                    // Wait for the page to load, then check WSL status
+                    thread::sleep(Duration::from_secs(2));
+                    if check_wsl() {
+                        // WSL exists — check if clipper setup is incomplete
+                        // Use the health endpoint since the server is running
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(Duration::from_secs(10))
+                            .build()
+                            .unwrap();
+                        if let Ok(resp) = client.get(&format!("{}/api/wsl/status", SERVER_URL)).send() {
+                            if let Ok(text) = resp.text() {
+                                if text.contains("\"clipper_installed\":false") || text.contains("\"openpilot_installed\":false") {
+                                    eprintln!("[startup] WSL detected but clipper setup incomplete — prompting user");
+                                    let _ = win.eval("setTimeout(function(){ showWslDialog(); }, 1000)");
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
             Ok(())
