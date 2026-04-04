@@ -1,13 +1,23 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/v2/crates/tauri-config-schema/schema.json",
-  "productName": "OP Replay Clipper",
+  "productName": "GlideKit",
   "version": "0.0.0",
-  "identifier": "com.opreplayclipper.desktop",
+  "identifier": "com.glidekit.desktop",
   "build": {
     "frontendDist": "../src"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "title": "GlideKit",
+        "width": 820,
+        "height": 920,
+        "minWidth": 600,
+        "minHeight": 700,
+        "center": true,
+        "resizable": true
+      }
+    ],
     "security": {
       "csp": null
     }

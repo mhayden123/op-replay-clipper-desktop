@@ -1,8 +1,8 @@
 [package]
-name = "op-replay-clipper-desktop"
+name = "glidekit-desktop"
 version = "0.1.0"
 edition = "2021"
-description = "Native desktop app for OP Replay Clipper"
+description = "Native desktop app for GlideKit"
 
 [dependencies]
 tauri = { version = "2", features = [] }
