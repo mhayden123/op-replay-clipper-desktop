@@ -575,18 +575,40 @@ try {
     Write-Warn 'No NVIDIA GPU detected.'
 }
 
-# --- WSL check (non-fatal) ---
+# --- WSL check (non-fatal, with timeout) ---
 Write-Step 'Checking WSL'
 try {
-    $r = Invoke-Native 'wsl.exe' @('--list', '--verbose')
-    if (($r.ExitCode -eq 0) -and ($r.Output -match 'Running')) {
-        Write-OK 'WSL available - UI render types supported'
-    } else {
-        Write-Warn 'WSL not running. UI render types (ui, ui-alt, driver-debug) unavailable.'
+    $wslExe = Get-Command 'wsl.exe' -ErrorAction SilentlyContinue
+    if (-not $wslExe) {
+        Write-Warn 'wsl.exe not found. WSL is not installed.'
         Write-Warn 'Install WSL: wsl --install'
+    } else {
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = 'wsl.exe'
+        $pinfo.Arguments = '--list --verbose'
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $p = New-Object System.Diagnostics.Process
+        $p.StartInfo = $pinfo
+        $p.Start() | Out-Null
+        $finished = $p.WaitForExit(5000)
+        if (-not $finished) {
+            $p.Kill()
+            Write-Warn 'WSL check timed out (5s). Assuming WSL is not available.'
+        } else {
+            $wslOut = $p.StandardOutput.ReadToEnd()
+            if (($p.ExitCode -eq 0) -and ($wslOut -match 'Running')) {
+                Write-OK 'WSL available - UI render types supported'
+            } else {
+                Write-Warn 'WSL not running. UI render types (ui, ui-alt, driver-debug) unavailable.'
+                Write-Warn 'Install WSL: wsl --install'
+            }
+        }
     }
 } catch {
-    Write-Warn 'WSL not detected.'
+    Write-Warn 'WSL check failed. Skipping.'
 }
 
 # --- Write completion marker ---
