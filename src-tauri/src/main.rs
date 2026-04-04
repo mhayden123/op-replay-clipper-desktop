@@ -254,61 +254,109 @@ fn stop_server(process: &mut Option<Child>) {
 // Windows bootstrap — runs automatically when project is missing
 // ---------------------------------------------------------------------------
 
-/// Find the bootstrap.ps1 script in the app's resources.
+/// Find the bootstrap.ps1 script — checks many locations and logs each attempt.
 #[cfg(target_os = "windows")]
 fn find_bootstrap_script(resource_dir: &Option<PathBuf>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Tauri resource dir (primary)
     if let Some(ref res_dir) = resource_dir {
-        // Tauri bundles resources in different locations depending on dev vs release
-        let candidates = [
-            res_dir.join("resources").join("bootstrap.ps1"),
-            res_dir.join("bootstrap.ps1"),
-            res_dir
-                .parent()
-                .map(|p| p.join("resources").join("bootstrap.ps1"))
-                .unwrap_or_default(),
-        ];
-        for path in &candidates {
-            if path.exists() {
-                return Some(path.clone());
-            }
+        eprintln!("[bootstrap-find] Tauri resource_dir: {:?}", res_dir);
+        candidates.push(res_dir.join("resources").join("bootstrap.ps1"));
+        candidates.push(res_dir.join("bootstrap.ps1"));
+        if let Some(parent) = res_dir.parent() {
+            candidates.push(parent.join("resources").join("bootstrap.ps1"));
         }
+    } else {
+        eprintln!("[bootstrap-find] Tauri resource_dir: None");
     }
 
-    // Also check next to the executable
+    // Next to the executable (NSIS installs here)
     if let Ok(exe) = std::env::current_exe() {
+        eprintln!("[bootstrap-find] Executable: {:?}", exe);
         if let Some(exe_dir) = exe.parent() {
-            let path = exe_dir.join("resources").join("bootstrap.ps1");
-            if path.exists() {
-                return Some(path);
+            candidates.push(exe_dir.join("resources").join("bootstrap.ps1"));
+            candidates.push(exe_dir.join("bootstrap.ps1"));
+            // NSIS $INSTDIR is typically the exe's directory
+            if let Some(grandparent) = exe_dir.parent() {
+                candidates.push(grandparent.join("resources").join("bootstrap.ps1"));
             }
         }
     }
 
+    // Check all candidates
+    for path in &candidates {
+        let exists = path.exists();
+        eprintln!("[bootstrap-find]   {:?} -> {}", path, if exists { "FOUND" } else { "not found" });
+        if exists {
+            return Some(path.clone());
+        }
+    }
+
+    eprintln!("[bootstrap-find] Script not found in any candidate location");
     None
 }
 
-/// Run the bootstrap.ps1 script with live progress updates to the window.
-/// Returns true if bootstrap succeeded.
+/// Download bootstrap.ps1 from GitHub as a last resort.
 #[cfg(target_os = "windows")]
-fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path) -> bool {
-    use std::io::BufRead;
-
-    let log_path = data_dir().join("bootstrap-app.log");
-    eprintln!("Running bootstrap: {:?}", script);
-    eprintln!("Log: {:?}", log_path);
-    send_status(window, "Setting up OP Replay Clipper...");
-
-    // Ensure the data dir exists for the log
-    fs::create_dir_all(data_dir()).ok();
+fn download_bootstrap_script() -> Option<PathBuf> {
+    let target = data_dir().join("bootstrap.ps1");
+    eprintln!("[bootstrap-download] Downloading bootstrap.ps1 from GitHub...");
 
     let result = Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
+            "-Command",
+            &format!(
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
+                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mhayden123/op-replay-clipper-desktop/main/src-tauri/resources/bootstrap.ps1' \
+                 -OutFile '{}'",
+                target.to_string_lossy()
+            ),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status();
+
+    match result {
+        Ok(s) if s.success() && target.exists() => {
+            eprintln!("[bootstrap-download] Downloaded to {:?}", target);
+            Some(target)
+        }
+        Ok(s) => {
+            eprintln!("[bootstrap-download] Download failed (exit code {:?})", s.code());
+            None
+        }
+        Err(e) => {
+            eprintln!("[bootstrap-download] PowerShell launch failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Run the bootstrap.ps1 script with live progress updates to the window.
+#[cfg(target_os = "windows")]
+fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path) -> bool {
+    use std::io::BufRead;
+
+    eprintln!("[bootstrap-run] Script: {:?}", script);
+    eprintln!("[bootstrap-run] Script exists: {}", script.exists());
+    eprintln!("[bootstrap-run] Script size: {:?}", fs::metadata(script).map(|m| m.len()));
+    send_status(window, "Setting up OP Replay Clipper...");
+
+    fs::create_dir_all(data_dir()).ok();
+
+    // Use -Command with explicit script invocation to avoid path quoting issues
+    let script_path = script.to_string_lossy().to_string();
+    let result = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
-            &script.to_string_lossy(),
-            "-Silent",
+            &script_path,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -316,45 +364,44 @@ fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path) -> boo
 
     match result {
         Ok(mut child) => {
-            let mut log_lines: Vec<String> = Vec::new();
-
             if let Some(stdout) = child.stdout.take() {
                 let reader = std::io::BufReader::new(stdout);
                 for line in reader.lines() {
                     if let Ok(line) = line {
-                        // Show step headers in the UI
+                        // Show step markers and checkpoints in the UI
                         if line.starts_with("==>") {
                             let msg = line.trim_start_matches("==>").trim();
                             send_status(window, msg);
+                        } else if line.contains("[OK]") {
+                            let msg = line.trim();
+                            send_status(window, msg);
+                        } else if line.contains("[FAIL]") {
+                            let msg = line.trim();
+                            send_status(window, msg);
                         }
                         eprintln!("[bootstrap] {}", line);
-                        log_lines.push(line);
                     }
                 }
             }
 
-            // Write log file
-            let _ = fs::write(&log_path, log_lines.join("\n"));
-
             let status = child.wait();
             match status {
                 Ok(s) if s.success() => {
-                    eprintln!("Bootstrap completed successfully");
+                    eprintln!("[bootstrap-run] Completed successfully");
                     true
                 }
                 Ok(s) => {
-                    eprintln!("Bootstrap failed with exit code: {:?}", s.code());
+                    eprintln!("[bootstrap-run] Failed with exit code: {:?}", s.code());
                     false
                 }
                 Err(e) => {
-                    eprintln!("Bootstrap wait error: {}", e);
+                    eprintln!("[bootstrap-run] Wait error: {}", e);
                     false
                 }
             }
         }
         Err(e) => {
-            eprintln!("Failed to launch PowerShell: {}", e);
-            let _ = fs::write(&log_path, format!("Failed to launch PowerShell: {}", e));
+            eprintln!("[bootstrap-run] Failed to launch PowerShell: {}", e);
             false
         }
     }
@@ -426,24 +473,29 @@ fn main() {
                             "Environment not ready ({}), starting bootstrap...",
                             reason
                         );
+                        send_status(&win, "First-time setup — this takes a few minutes...");
 
-                        // Find and run the bootstrap script
-                        let script = find_bootstrap_script(&resource_path);
+                        // Find the bootstrap script: bundled resources → download from GitHub
+                        let script = find_bootstrap_script(&resource_path)
+                            .or_else(|| {
+                                eprintln!("[startup] Bundled script not found, downloading...");
+                                send_status(&win, "Downloading setup script...");
+                                download_bootstrap_script()
+                            });
+
                         if let Some(ref script_path) = script {
-                            send_status(&win, "First-time setup — this takes a few minutes...");
                             if !run_bootstrap(&win, script_path) {
                                 send_error(
                                     &win,
-                                    "Setup failed. Check the log at %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
+                                    "Setup failed. Check the log at:\n%LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
                                 );
                                 return;
                             }
                             send_status(&win, "Setup complete! Starting server...");
                         } else {
-                            eprintln!("Bootstrap script not found in resources");
                             send_error(
                                 &win,
-                                "Setup files not found. Please reinstall the application.",
+                                "Could not find or download the setup script. Check your internet connection and try reinstalling.",
                             );
                             return;
                         }
@@ -451,10 +503,11 @@ fn main() {
                         // Re-check environment after bootstrap
                         match check_environment() {
                             Ok(env) => env,
-                            Err(_) => {
+                            Err(retry_reason) => {
+                                eprintln!("[startup] Post-bootstrap check failed: {}", retry_reason);
                                 send_error(
                                     &win,
-                                    "Setup completed but environment still not ready. Check the log at %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
+                                    "Setup completed but environment is still not ready.\nCheck: %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
                                 );
                                 return;
                             }
