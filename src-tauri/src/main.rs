@@ -6,7 +6,7 @@
 // Platform support:
 //   Linux:   Full support (all render types, NVIDIA GPU)
 //   macOS:   Full support (all render types, VideoToolbox GPU)
-//   Windows: Non-UI renders native, UI renders via WSL
+//   Windows: Auto-bootstrap on first launch, non-UI renders native, UI via WSL
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -23,7 +23,7 @@ const HEALTH_URL: &str = "http://localhost:7860/api/health";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
-// App state — holds the managed server child process
+// App state
 // ---------------------------------------------------------------------------
 
 struct AppState {
@@ -43,14 +43,7 @@ fn data_dir() -> PathBuf {
     dir
 }
 
-/// Locate the clipper project directory.
-///
-/// Search order:
-/// 1. `CLIPPER_PROJECT_DIR` env var (explicit override)
-/// 2. Sibling directory `op-replay-clipper-native` next to the executable
-/// 3. `~/op-replay-clipper-native` (common clone location)
-///
-/// Returns `None` if clip.py is not found at any candidate.
+/// Locate the clipper project directory (must contain clip.py).
 fn find_clipper_project() -> Option<PathBuf> {
     // Explicit override
     if let Ok(dir) = std::env::var("CLIPPER_PROJECT_DIR") {
@@ -87,7 +80,7 @@ fn find_clipper_project() -> Option<PathBuf> {
         candidates.push(home.join("op-replay-clipper-native"));
     }
 
-    // Windows: check LOCALAPPDATA (where the NSIS installer puts it)
+    // Windows: %LOCALAPPDATA%\op-replay-clipper\ (where NSIS bootstrap puts it)
     if cfg!(windows) {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             candidates.push(
@@ -101,9 +94,8 @@ fn find_clipper_project() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.join("clip.py").exists())
 }
 
-/// Resolve the `uv` binary path. Checks PATH, then common install locations.
+/// Resolve the `uv` binary path.
 fn resolve_uv() -> Option<String> {
-    // Try PATH first
     let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
     if Command::new(uv_name)
         .arg("--version")
@@ -116,12 +108,11 @@ fn resolve_uv() -> Option<String> {
     }
 
     let home = dirs::home_dir()?;
-
     if cfg!(windows) {
-        // Windows: uv installs to %USERPROFILE%\.local\bin or via pip
         let candidates = [
             home.join(".local\\bin\\uv.exe"),
             home.join("AppData\\Roaming\\Python\\Scripts\\uv.exe"),
+            home.join(".cargo\\bin\\uv.exe"),
         ];
         for path in &candidates {
             if path.exists() {
@@ -136,7 +127,6 @@ fn resolve_uv() -> Option<String> {
             }
         }
     }
-
     None
 }
 
@@ -144,7 +134,6 @@ fn resolve_uv() -> Option<String> {
 // Environment checks
 // ---------------------------------------------------------------------------
 
-/// Check if NVIDIA GPU is available (Linux/Windows).
 fn check_nvidia() -> bool {
     let smi = if cfg!(windows) {
         "nvidia-smi.exe"
@@ -160,7 +149,6 @@ fn check_nvidia() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if WSL is available and has a running distribution (Windows only).
 #[cfg(target_os = "windows")]
 fn check_wsl() -> bool {
     Command::new("wsl.exe")
@@ -177,40 +165,17 @@ fn check_wsl() -> bool {
     false
 }
 
-/// Check that the native clipper environment is set up.
+/// Check that the clipper environment is ready to launch the server.
+/// Returns (project_dir, uv_path) on success.
 fn check_environment() -> Result<(PathBuf, String), String> {
-    // Find clipper project
-    let project_dir = find_clipper_project().ok_or_else(|| {
-        if cfg!(windows) {
-            "Clipper project not found. Clone op-replay-clipper-native and run install_windows.py"
-                .to_string()
-        } else {
-            "Clipper project not found. Clone op-replay-clipper-native and run ./install.sh"
-                .to_string()
-        }
-    })?;
+    let project_dir = find_clipper_project().ok_or("project_not_found")?;
+    let uv_path = resolve_uv().ok_or("uv_not_found")?;
 
-    // Check uv
-    let uv_path = resolve_uv().ok_or_else(|| {
-        if cfg!(windows) {
-            "uv not found. Run: pip install uv".to_string()
-        } else {
-            "uv not found. Run the install script: ./install.sh".to_string()
-        }
-    })?;
-
-    // On Linux/macOS, check for openpilot installation (needed for UI renders).
-    // On Windows, openpilot is optional (only non-UI renders run natively).
+    // On Linux/macOS, also need openpilot for UI renders
     if !cfg!(windows) {
-        let python_path = if cfg!(target_os = "macos") {
-            data_dir().join("openpilot/.venv/bin/python")
-        } else {
-            data_dir().join("openpilot/.venv/bin/python")
-        };
+        let python_path = data_dir().join("openpilot/.venv/bin/python");
         if !python_path.exists() {
-            return Err(
-                "openpilot not installed. Run ./install.sh in the clipper project.".into(),
-            );
+            return Err("openpilot_not_installed".into());
         }
     }
 
@@ -221,7 +186,6 @@ fn check_environment() -> Result<(PathBuf, String), String> {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
-/// Start the uvicorn server as a child process.
 fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     let openpilot_dir = data_dir().join("openpilot");
     let output_dir = data_dir().join("output");
@@ -256,7 +220,6 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     Ok(child)
 }
 
-/// Wait for the server health endpoint to respond.
 fn wait_for_server() -> bool {
     eprintln!("Waiting for server...");
     let start = Instant::now();
@@ -278,7 +241,6 @@ fn wait_for_server() -> bool {
     false
 }
 
-/// Stop the server child process.
 fn stop_server(process: &mut Option<Child>) {
     if let Some(mut child) = process.take() {
         eprintln!("Stopping server (pid {})...", child.id());
@@ -289,48 +251,59 @@ fn stop_server(process: &mut Option<Child>) {
 }
 
 // ---------------------------------------------------------------------------
-// Windows first-run bootstrap
+// Windows bootstrap — runs automatically when project is missing
 // ---------------------------------------------------------------------------
 
-/// Check if the Windows bootstrap has completed (marker file exists).
+/// Find the bootstrap.ps1 script in the app's resources.
 #[cfg(target_os = "windows")]
-fn bootstrap_completed() -> bool {
-    data_dir().join("bootstrap-complete").exists()
-}
-
-/// Run the bootstrap.ps1 script bundled as a resource.
-/// Returns true if bootstrap succeeded, false otherwise.
-/// Reads progress from the progress file and sends status updates to the window.
-#[cfg(target_os = "windows")]
-fn run_bootstrap(
-    window: &tauri::WebviewWindow,
-    resource_dir: &std::path::Path,
-) -> bool {
-    let script = resource_dir.join("resources").join("bootstrap.ps1");
-    if !script.exists() {
-        // Try alternative resource path (Tauri bundles resources differently)
-        let alt = resource_dir.join("bootstrap.ps1");
-        if !alt.exists() {
-            eprintln!("Bootstrap script not found at {:?} or {:?}", script, alt);
-            return false;
+fn find_bootstrap_script(resource_dir: &Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(ref res_dir) = resource_dir {
+        // Tauri bundles resources in different locations depending on dev vs release
+        let candidates = [
+            res_dir.join("resources").join("bootstrap.ps1"),
+            res_dir.join("bootstrap.ps1"),
+            res_dir
+                .parent()
+                .map(|p| p.join("resources").join("bootstrap.ps1"))
+                .unwrap_or_default(),
+        ];
+        for path in &candidates {
+            if path.exists() {
+                return Some(path.clone());
+            }
         }
-        return run_bootstrap_script(window, &alt);
     }
-    run_bootstrap_script(window, &script)
+
+    // Also check next to the executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let path = exe_dir.join("resources").join("bootstrap.ps1");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }
 
+/// Run the bootstrap.ps1 script with live progress updates to the window.
+/// Returns true if bootstrap succeeded.
 #[cfg(target_os = "windows")]
-fn run_bootstrap_script(
-    window: &tauri::WebviewWindow,
-    script: &std::path::Path,
-) -> bool {
+fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path) -> bool {
     use std::io::BufRead;
 
+    let log_path = data_dir().join("bootstrap-app.log");
     eprintln!("Running bootstrap: {:?}", script);
-    send_status(window, "Setting up (this may take a few minutes)...");
+    eprintln!("Log: {:?}", log_path);
+    send_status(window, "Setting up OP Replay Clipper...");
+
+    // Ensure the data dir exists for the log
+    fs::create_dir_all(data_dir()).ok();
 
     let result = Command::new("powershell.exe")
         .args([
+            "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
@@ -343,19 +316,26 @@ fn run_bootstrap_script(
 
     match result {
         Ok(mut child) => {
-            // Read stdout for progress updates
+            let mut log_lines: Vec<String> = Vec::new();
+
             if let Some(stdout) = child.stdout.take() {
                 let reader = std::io::BufReader::new(stdout);
                 for line in reader.lines() {
                     if let Ok(line) = line {
+                        // Show step headers in the UI
                         if line.starts_with("==>") {
                             let msg = line.trim_start_matches("==>").trim();
                             send_status(window, msg);
                         }
                         eprintln!("[bootstrap] {}", line);
+                        log_lines.push(line);
                     }
                 }
             }
+
+            // Write log file
+            let _ = fs::write(&log_path, log_lines.join("\n"));
+
             let status = child.wait();
             match status {
                 Ok(s) if s.success() => {
@@ -373,17 +353,11 @@ fn run_bootstrap_script(
             }
         }
         Err(e) => {
-            eprintln!("Failed to launch bootstrap: {}", e);
+            eprintln!("Failed to launch PowerShell: {}", e);
+            let _ = fs::write(&log_path, format!("Failed to launch PowerShell: {}", e));
             false
         }
     }
-}
-
-// Stub for non-Windows platforms
-#[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
-fn bootstrap_completed() -> bool {
-    true // No bootstrap needed on Linux/macOS
 }
 
 // ---------------------------------------------------------------------------
@@ -432,48 +406,98 @@ fn main() {
             let handle = app.handle().clone();
             #[cfg(target_os = "windows")]
             let resource_path = app.path().resource_dir().ok();
+
             thread::spawn(move || {
                 let win = window;
 
-                // Windows: run first-run bootstrap if not completed
-                #[cfg(target_os = "windows")]
-                {
-                    if !bootstrap_completed() {
-                        send_status(&win, "First-time setup — installing dependencies...");
-                        if let Some(ref res_dir) = resource_path {
-                            if run_bootstrap(&win, res_dir) {
-                                send_status(&win, "Setup complete!");
-                            } else {
-                                send_status(&win, "Setup had issues — trying to continue...");
+                // --- Phase 1: Ensure environment is ready ---
+                send_status(&win, "Checking environment...");
+                let env_result = check_environment();
+
+                let (project_dir, uv_path) = match env_result {
+                    Ok(env) => env,
+
+                    // On Windows: auto-bootstrap if project/uv is missing
+                    #[cfg(target_os = "windows")]
+                    Err(ref reason)
+                        if reason == "project_not_found" || reason == "uv_not_found" =>
+                    {
+                        eprintln!(
+                            "Environment not ready ({}), starting bootstrap...",
+                            reason
+                        );
+
+                        // Find and run the bootstrap script
+                        let script = find_bootstrap_script(&resource_path);
+                        if let Some(ref script_path) = script {
+                            send_status(&win, "First-time setup — this takes a few minutes...");
+                            if !run_bootstrap(&win, script_path) {
+                                send_error(
+                                    &win,
+                                    "Setup failed. Check the log at %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
+                                );
+                                return;
                             }
+                            send_status(&win, "Setup complete! Starting server...");
                         } else {
-                            eprintln!("WARNING: Could not determine resource directory for bootstrap");
+                            eprintln!("Bootstrap script not found in resources");
+                            send_error(
+                                &win,
+                                "Setup files not found. Please reinstall the application.",
+                            );
+                            return;
+                        }
+
+                        // Re-check environment after bootstrap
+                        match check_environment() {
+                            Ok(env) => env,
+                            Err(_) => {
+                                send_error(
+                                    &win,
+                                    "Setup completed but environment still not ready. Check the log at %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
+                                );
+                                return;
+                            }
                         }
                     }
-                }
 
-                // Check native environment
-                send_status(&win, "Checking environment...");
-                let (project_dir, uv_path) = match check_environment() {
-                    Ok(env) => env,
-                    Err(msg) => {
-                        send_error(&win, &msg);
+                    // On Linux/macOS or non-recoverable Windows errors: show platform-specific message
+                    Err(reason) => {
+                        let msg = match reason.as_str() {
+                            "project_not_found" if cfg!(target_os = "macos") => {
+                                "Clipper not found. Run: git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh"
+                            }
+                            "project_not_found" if cfg!(windows) => {
+                                "Setup failed — clipper project not found after bootstrap."
+                            }
+                            "project_not_found" => {
+                                "Clipper not found. Run: git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh"
+                            }
+                            "uv_not_found" if cfg!(windows) => {
+                                "uv not found after setup. Try reinstalling the application."
+                            }
+                            "uv_not_found" => {
+                                "uv not found. Run ./install.sh in the clipper project directory."
+                            }
+                            "openpilot_not_installed" => {
+                                "openpilot not installed. Run ./install.sh in the clipper project directory."
+                            }
+                            other => other,
+                        };
+                        send_error(&win, msg);
                         return;
                     }
                 };
 
-                // Platform-specific GPU detection
+                // --- Phase 2: Report platform capabilities ---
                 if cfg!(target_os = "macos") {
-                    eprintln!("macOS detected — VideoToolbox hardware acceleration available.");
+                    eprintln!("macOS — VideoToolbox hardware acceleration available.");
                 } else if check_nvidia() {
                     eprintln!("NVIDIA GPU detected.");
                 } else {
-                    eprintln!(
-                        "WARNING: No NVIDIA GPU detected. Rendering will use CPU (slower)."
-                    );
+                    eprintln!("No NVIDIA GPU detected. CPU rendering will be used.");
                 }
 
-                // Windows: report WSL status
                 if cfg!(windows) {
                     if check_wsl() {
                         eprintln!("WSL detected — UI render types available.");
@@ -482,7 +506,7 @@ fn main() {
                     }
                 }
 
-                // Start the server
+                // --- Phase 3: Start server ---
                 send_status(&win, "Starting server...");
                 let child = match start_server(&project_dir, &uv_path) {
                     Ok(c) => c,
@@ -492,31 +516,22 @@ fn main() {
                     }
                 };
 
-                // Store the child process for cleanup on window close
                 let state = handle.state::<AppState>();
                 *state.server_process.lock().unwrap() = Some(child);
 
-                // Wait for the server to be ready
+                // --- Phase 4: Wait for server ---
                 send_status(&win, "Waiting for server...");
                 if !wait_for_server() {
                     let mut proc = state.server_process.lock().unwrap();
                     stop_server(&mut proc);
-                    let install_cmd = if cfg!(windows) {
-                        "install_windows.py"
-                    } else {
-                        "./install.sh"
-                    };
                     send_error(
                         &win,
-                        &format!(
-                            "Server failed to start. Run {} to set up the environment.",
-                            install_cmd
-                        ),
+                        "Server failed to start. Check that the clipper is installed correctly.",
                     );
                     return;
                 }
 
-                // Redirect the window to the running server
+                // --- Phase 5: Redirect to web UI ---
                 let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
             });
 
