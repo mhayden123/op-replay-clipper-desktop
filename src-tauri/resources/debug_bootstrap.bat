@@ -8,11 +8,11 @@ echo   GlideKit — Debug Bootstrap
 echo ========================================
 echo.
 
-set CLIPPER_HOME=%LOCALAPPDATA%\glidekit
-set LOG_FILE=%CLIPPER_HOME%\debug-bootstrap.log
+set GLIDEKIT_HOME=%LOCALAPPDATA%\glidekit
+set LOG_FILE=%GLIDEKIT_HOME%\debug-bootstrap.log
 
 echo Creating log directory...
-if not exist "%CLIPPER_HOME%" mkdir "%CLIPPER_HOME%"
+if not exist "%GLIDEKIT_HOME%" mkdir "%GLIDEKIT_HOME%"
 
 echo Debug log: %LOG_FILE%
 echo.

@@ -76,10 +76,10 @@ fn read_registry_string(name: &str) -> Option<String> {
     None
 }
 
-/// Locate the clipper project directory (must contain clip.py).
-fn find_clipper_project() -> Option<PathBuf> {
+/// Locate the GlideKit project directory (must contain clip.py).
+fn find_glidekit_project() -> Option<PathBuf> {
     // Explicit override
-    if let Ok(dir) = std::env::var("CLIPPER_PROJECT_DIR") {
+    if let Ok(dir) = std::env::var("GLIDEKIT_PROJECT_DIR") {
         let p = PathBuf::from(&dir);
         if p.join("clip.py").exists() {
             return Some(p);
@@ -266,10 +266,10 @@ fn check_wsl() -> bool {
     false
 }
 
-/// Check that the clipper environment is ready to launch the server.
+/// Check that the GlideKit environment is ready to launch the server.
 /// Returns (project_dir, uv_path) on success.
 fn check_environment() -> Result<(PathBuf, String), String> {
-    let project_dir = find_clipper_project().ok_or("project_not_found")?;
+    let project_dir = find_glidekit_project().ok_or("project_not_found")?;
     let uv_path = resolve_uv().ok_or("uv_not_found")?;
 
     // On Linux/macOS, also need openpilot for UI renders
@@ -308,10 +308,10 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
             "7860",
         ])
         .current_dir(project_dir)
-        .env("CLIPPER_HOME", data_dir().to_string_lossy().as_ref())
+        .env("GLIDEKIT_HOME", data_dir().to_string_lossy().as_ref())
         .env("OPENPILOT_ROOT", openpilot_dir.to_string_lossy().as_ref())
-        .env("CLIPPER_OUTPUT_DIR", output_dir.to_string_lossy().as_ref())
-        .env("CLIPPER_DATA_DIR", data_dir_path.to_string_lossy().as_ref())
+        .env("GLIDEKIT_OUTPUT_DIR", output_dir.to_string_lossy().as_ref())
+        .env("GLIDEKIT_DATA_DIR", data_dir_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -646,22 +646,22 @@ fn main() {
                     Err(reason) => {
                         let msg = match reason.as_str() {
                             "project_not_found" if cfg!(target_os = "macos") => {
-                                "Clipper not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
+                                "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
                             }
                             "project_not_found" if cfg!(windows) => {
-                                "Setup failed — clipper project not found after bootstrap."
+                                "Setup failed — GlideKit project not found after bootstrap."
                             }
                             "project_not_found" => {
-                                "Clipper not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
+                                "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
                             }
                             "uv_not_found" if cfg!(windows) => {
                                 "uv not found after setup. Try reinstalling the application."
                             }
                             "uv_not_found" => {
-                                "uv not found. Run ./install.sh in the clipper project directory."
+                                "uv not found. Run ./install.sh in the GlideKit project directory."
                             }
                             "openpilot_not_installed" => {
-                                "openpilot not installed. Run ./install.sh in the clipper project directory."
+                                "openpilot not installed. Run ./install.sh in the GlideKit project directory."
                             }
                             other => other,
                         };
@@ -707,7 +707,7 @@ fn main() {
                     stop_server(&mut proc);
                     send_error(
                         &win,
-                        "Server failed to start. Check that the clipper is installed correctly.",
+                        "Server failed to start. Check that GlideKit is installed correctly.",
                     );
                     return;
                 }
@@ -721,7 +721,7 @@ fn main() {
                     // Wait for the page to load, then check WSL status
                     thread::sleep(Duration::from_secs(2));
                     if check_wsl() {
-                        // WSL exists — check if clipper setup is incomplete
+                        // WSL exists — check if GlideKit setup is incomplete
                         // Use the health endpoint since the server is running
                         let client = reqwest::blocking::Client::builder()
                             .timeout(Duration::from_secs(10))
@@ -729,8 +729,8 @@ fn main() {
                             .unwrap();
                         if let Ok(resp) = client.get(&format!("{}/api/wsl/status", SERVER_URL)).send() {
                             if let Ok(text) = resp.text() {
-                                if text.contains("\"clipper_installed\":false") || text.contains("\"openpilot_installed\":false") {
-                                    eprintln!("[startup] WSL detected but clipper setup incomplete — prompting user");
+                                if text.contains("\"glidekit_installed\":false") || text.contains("\"openpilot_installed\":false") {
+                                    eprintln!("[startup] WSL detected but GlideKit setup incomplete — prompting user");
                                     let _ = win.eval("setTimeout(function(){ showWslDialog(); }, 1000)");
                                 }
                             }
