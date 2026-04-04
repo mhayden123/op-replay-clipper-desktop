@@ -1,14 +1,14 @@
 @echo off
-REM OP Replay Clipper — Debug Bootstrap Launcher
+REM GlideKit — Debug Bootstrap Launcher
 REM Double-click this to diagnose bootstrap issues.
 REM Keeps the terminal open so you can see what happened.
 
 echo ========================================
-echo   OP Replay Clipper — Debug Bootstrap
+echo   GlideKit — Debug Bootstrap
 echo ========================================
 echo.
 
-set CLIPPER_HOME=%LOCALAPPDATA%\op-replay-clipper
+set CLIPPER_HOME=%LOCALAPPDATA%\glidekit
 set LOG_FILE=%CLIPPER_HOME%\debug-bootstrap.log
 
 echo Creating log directory...

@@ -1,4 +1,4 @@
-# OP Replay Clipper - Windows Bootstrap Script
+# GlideKit - Windows Bootstrap Script
 # Compatible with PowerShell 5.1 (ships with Windows 10/11).
 # No PS7 syntax. No && operator. No ternary. No null-coalescing.
 #
@@ -13,7 +13,7 @@ param(
 )
 
 # Registry key for tracking install locations
-$RegKey = 'HKCU:\Software\OP Replay Clipper'
+$RegKey = 'HKCU:\Software\GlideKit'
 
 # Determine ClipperHome - check registry first, then default
 $ClipperHome = $null
@@ -24,7 +24,7 @@ try {
     }
 } catch {}
 if (-not $ClipperHome) {
-    $ClipperHome = Join-Path $env:LOCALAPPDATA 'op-replay-clipper'
+    $ClipperHome = Join-Path $env:LOCALAPPDATA 'glidekit'
 }
 
 # Guarantee logging from the very first line
@@ -37,7 +37,7 @@ Start-Transcript -Path $LogFile -Force
 $ErrorActionPreference = 'Continue'
 
 Write-Host '========================================'
-Write-Host '  OP Replay Clipper - Windows Bootstrap'
+Write-Host '  GlideKit - Windows Bootstrap'
 Write-Host '========================================'
 Write-Host ''
 
@@ -52,7 +52,7 @@ Write-Host ('Working dir: ' + (Get-Location).Path)
 Write-Host ('Date: ' + (Get-Date -Format o))
 Write-Host ''
 
-$ProjectDir = Join-Path $ClipperHome 'op-replay-clipper-native'
+$ProjectDir = Join-Path $ClipperHome 'glidekit'
 $CheckpointFile = Join-Path $ClipperHome 'bootstrap-checkpoints.txt'
 
 function Write-Step {
@@ -520,9 +520,9 @@ if (Test-Path $clipPy) {
         try { Pop-Location } catch {}
     }
 } else {
-    Write-Step 'Cloning op-replay-clipper-native'
+    Write-Step 'Cloning glidekit'
     try {
-        $r = Invoke-Native 'git' @('clone', 'https://github.com/mhayden123/op-replay-clipper-native.git', $ProjectDir)
+        $r = Invoke-Native 'git' @('clone', 'https://github.com/mhayden123/glidekit.git', $ProjectDir)
         Write-Host ('  git clone exit code: ' + $r.ExitCode)
         if ($r.Output) { Write-Host ('  ' + $r.Output) }
         if (Test-Path (Join-Path $ProjectDir 'clip.py')) {

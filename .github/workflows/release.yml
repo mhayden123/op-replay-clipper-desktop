@@ -126,7 +126,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "OP Replay Clipper ${{ github.ref_name }}"
+          name: "GlideKit ${{ github.ref_name }}"
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
           files: |
@@ -157,8 +157,8 @@ jobs:
             ### Prerequisites
 
             1. Clone and install the native clipper first:
-               - **Linux/macOS**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh`
-               - **Windows**: `git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && python install_windows.py`
+               - **Linux/macOS**: `git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh`
+               - **Windows**: `git clone https://github.com/mhayden123/glidekit && cd glidekit && python install_windows.py`
             2. Run the desktop app — it finds the clipper project and starts the server automatically.
 
             ### Platform Notes

@@ -1,4 +1,4 @@
-// OP Replay Clipper -- Tauri Desktop App
+// GlideKit -- Tauri Desktop App
 //
 // Manages a local FastAPI server (uvicorn) as a child process.
 // On Windows, auto-bootstraps Python/Git/uv/FFmpeg on first launch.
@@ -34,23 +34,23 @@ struct AppState {
 // Path detection
 // ---------------------------------------------------------------------------
 
-/// Get the app data directory (~/.op-replay-clipper).
+/// Get the app data directory (~/.glidekit).
 fn data_dir() -> PathBuf {
     let dir = dirs::home_dir()
         .expect("Cannot determine home directory")
-        .join(".op-replay-clipper");
+        .join(".glidekit");
     fs::create_dir_all(&dir).ok();
     dir
 }
 
 /// Read a string value from the app's registry key (Windows only).
-/// Key: HKCU\Software\OP Replay Clipper\{name}
+/// Key: HKCU\Software\GlideKit\{name}
 #[cfg(target_os = "windows")]
 fn read_registry_string(name: &str) -> Option<String> {
     let output = Command::new("reg.exe")
         .args([
             "query",
-            r"HKCU\Software\OP Replay Clipper",
+            r"HKCU\Software\GlideKit",
             "/v",
             name,
         ])
@@ -104,7 +104,7 @@ fn find_clipper_project() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             for ancestor in [parent, parent.parent().unwrap_or(parent)] {
-                candidates.push(ancestor.join("op-replay-clipper-native"));
+                candidates.push(ancestor.join("glidekit"));
                 if ancestor.join("clip.py").exists() {
                     return Some(ancestor.to_path_buf());
                 }
@@ -117,21 +117,21 @@ fn find_clipper_project() -> Option<PathBuf> {
         if cwd.join("clip.py").exists() {
             return Some(cwd);
         }
-        candidates.push(cwd.join("op-replay-clipper-native"));
+        candidates.push(cwd.join("glidekit"));
     }
 
     // Home directory
     if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join("op-replay-clipper-native"));
+        candidates.push(home.join("glidekit"));
     }
 
-    // Windows: %LOCALAPPDATA%\op-replay-clipper\ (default bootstrap location)
+    // Windows: %LOCALAPPDATA%\glidekit\ (default bootstrap location)
     if cfg!(windows) {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             candidates.push(
                 PathBuf::from(&local_app_data)
-                    .join("op-replay-clipper")
-                    .join("op-replay-clipper-native"),
+                    .join("glidekit")
+                    .join("glidekit"),
             );
         }
     }
@@ -412,7 +412,7 @@ fn download_bootstrap_script() -> Option<PathBuf> {
             "-Command",
             &format!(
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mhayden123/op-replay-clipper-desktop/main/src-tauri/resources/bootstrap.ps1' \
+                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mhayden123/glidekit-desktop/main/src-tauri/resources/bootstrap.ps1' \
                  -OutFile '{}'",
                 target.to_string_lossy()
             ),
@@ -446,7 +446,7 @@ fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, clean:
     eprintln!("[bootstrap-run] Script exists: {}", script.exists());
     eprintln!("[bootstrap-run] Script size: {:?}", fs::metadata(script).map(|m| m.len()));
     eprintln!("[bootstrap-run] Clean: {}", clean);
-    send_status(window, if clean { "Clean install - re-downloading all files..." } else { "Setting up OP Replay Clipper..." });
+    send_status(window, if clean { "Clean install - re-downloading all files..." } else { "Setting up GlideKit..." });
 
     fs::create_dir_all(data_dir()).ok();
 
@@ -556,7 +556,7 @@ fn main() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("OP Replay Clipper")
+            .title("GlideKit")
             .inner_size(820.0, 920.0)
             .min_inner_size(600.0, 700.0)
             .build()?;
@@ -573,7 +573,7 @@ fn main() {
                 if clean_install {
                     eprintln!("[startup] --clean: deleting project directory");
                     send_status(&win, "Clean install - removing old files...");
-                    let project = data_dir().join("op-replay-clipper-native");
+                    let project = data_dir().join("glidekit");
                     if project.exists() {
                         let _ = fs::remove_dir_all(&project);
                     }
@@ -615,7 +615,7 @@ fn main() {
                             if !run_bootstrap(&win, script_path, clean_install) {
                                 send_error(
                                     &win,
-                                    "Setup failed. Check the log at:\n%LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
+                                    "Setup failed. Check the log at:\n%LOCALAPPDATA%\\glidekit\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
                                 );
                                 return;
                             }
@@ -635,7 +635,7 @@ fn main() {
                                 eprintln!("[startup] Post-bootstrap check failed: {}", retry_reason);
                                 send_error(
                                     &win,
-                                    "Setup completed but environment is still not ready.\nCheck: %LOCALAPPDATA%\\op-replay-clipper\\bootstrap-app.log",
+                                    "Setup completed but environment is still not ready.\nCheck: %LOCALAPPDATA%\\glidekit\\bootstrap-app.log",
                                 );
                                 return;
                             }
@@ -646,13 +646,13 @@ fn main() {
                     Err(reason) => {
                         let msg = match reason.as_str() {
                             "project_not_found" if cfg!(target_os = "macos") => {
-                                "Clipper not found. Run: git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh"
+                                "Clipper not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
                             }
                             "project_not_found" if cfg!(windows) => {
                                 "Setup failed — clipper project not found after bootstrap."
                             }
                             "project_not_found" => {
-                                "Clipper not found. Run: git clone https://github.com/mhayden123/op-replay-clipper-native && cd op-replay-clipper-native && ./install.sh"
+                                "Clipper not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
                             }
                             "uv_not_found" if cfg!(windows) => {
                                 "uv not found after setup. Try reinstalling the application."

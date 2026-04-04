@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# OP Replay Clipper Desktop -- Build from source
+# GlideKit Desktop -- Build from source
 # Sets up Tauri build dependencies and builds the desktop app.
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
