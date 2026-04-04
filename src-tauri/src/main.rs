@@ -97,6 +97,8 @@ fn find_clipper_project() -> Option<PathBuf> {
 /// Resolve the `uv` binary path.
 fn resolve_uv() -> Option<String> {
     let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+
+    // Try PATH first
     if Command::new(uv_name)
         .arg("--version")
         .stdout(Stdio::null())
@@ -104,29 +106,42 @@ fn resolve_uv() -> Option<String> {
         .status()
         .is_ok()
     {
+        eprintln!("[resolve-uv] Found on PATH: {}", uv_name);
         return Some(uv_name.to_string());
     }
 
     let home = dirs::home_dir()?;
-    if cfg!(windows) {
-        let candidates = [
-            home.join(".local\\bin\\uv.exe"),
-            home.join("AppData\\Roaming\\Python\\Scripts\\uv.exe"),
-            home.join(".cargo\\bin\\uv.exe"),
+    let candidates: Vec<PathBuf> = if cfg!(windows) {
+        // Search all known Windows install locations for uv.exe
+        let mut paths = vec![
+            home.join("AppData").join("Roaming").join("Python").join("Python312").join("Scripts").join("uv.exe"),
+            home.join("AppData").join("Roaming").join("Python").join("Python313").join("Scripts").join("uv.exe"),
+            home.join("AppData").join("Roaming").join("Python").join("Scripts").join("uv.exe"),
+            home.join(".local").join("bin").join("uv.exe"),
+            home.join(".cargo").join("bin").join("uv.exe"),
         ];
-        for path in &candidates {
-            if path.exists() {
-                return Some(path.to_string_lossy().to_string());
-            }
+        // Also check LOCALAPPDATA Python paths
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let local = PathBuf::from(local);
+            paths.push(local.join("Programs").join("Python").join("Python312").join("Scripts").join("uv.exe"));
+            paths.push(local.join("Programs").join("Python").join("Python313").join("Scripts").join("uv.exe"));
         }
+        paths
     } else {
-        let candidates = [home.join(".local/bin/uv"), home.join(".cargo/bin/uv")];
-        for path in &candidates {
-            if path.exists() {
-                return Some(path.to_string_lossy().to_string());
-            }
+        vec![home.join(".local/bin/uv"), home.join(".cargo/bin/uv")]
+    };
+
+    for path in &candidates {
+        let exists = path.exists();
+        eprintln!("[resolve-uv]   {:?} -> {}", path, if exists { "FOUND" } else { "no" });
+        if exists {
+            let resolved = path.to_string_lossy().to_string();
+            eprintln!("[resolve-uv] Using: {}", resolved);
+            return Some(resolved);
         }
     }
+
+    eprintln!("[resolve-uv] uv not found in any location");
     None
 }
 

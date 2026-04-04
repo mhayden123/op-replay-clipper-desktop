@@ -79,7 +79,14 @@ function Refresh-Path {
 function Add-ToPath {
     param([string]$Dir)
     if (Test-Path $Dir) {
+        # Add to current session
         $env:PATH = $env:PATH + ';' + $Dir
+        # Persist to user PATH so new processes (Tauri app, terminals) can find it
+        $userPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+        if ($userPath -and ($userPath -notlike ('*' + $Dir + '*'))) {
+            [System.Environment]::SetEnvironmentVariable('PATH', $userPath + ';' + $Dir, 'User')
+            Write-Host ('  [PATH] Permanently added: ' + $Dir)
+        }
     }
 }
 
