@@ -304,6 +304,21 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         eprintln!("Warning: failed to create data directory {:?}: {}", data_dir_path, e);
     }
 
+    // Ensure Python dependencies are installed before starting the server.
+    // Without this, `uv run` may fail if .venv/ doesn't exist yet.
+    eprintln!("[server] Running uv sync in {:?}", project_dir);
+    let sync_status = Command::new(uv_path)
+        .args(["sync"])
+        .current_dir(project_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match sync_status {
+        Ok(s) if s.success() => eprintln!("[server] uv sync completed"),
+        Ok(s) => eprintln!("[server] uv sync exited with {:?} (continuing anyway)", s.code()),
+        Err(e) => eprintln!("[server] uv sync failed to run: {} (continuing anyway)", e),
+    }
+
     let child = Command::new(uv_path)
         .args([
             "run",
@@ -439,6 +454,26 @@ fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
     }
 }
 
+/// Strip ANSI escape codes from a string.
+#[cfg(not(target_os = "windows"))]
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip until we hit a letter (end of ANSI sequence)
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Run install.sh from the project directory with live progress to the UI.
 #[cfg(not(target_os = "windows"))]
 fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Path) -> bool {
@@ -462,24 +497,37 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
 
     match result {
         Ok(mut child) => {
-            // Stream stdout for progress
+            // Stream stdout for progress updates
             if let Some(stdout) = child.stdout.take() {
                 let reader = std::io::BufReader::new(stdout);
                 for line in reader.lines() {
-                    if let Ok(line) = line {
-                        // Show section headers and status markers
-                        if line.starts_with("===")
-                            || line.starts_with("---")
-                            || line.contains("[OK]")
-                            || line.contains("[SKIP]")
-                            || line.contains("Step ")
-                        {
-                            let msg = line.trim_matches(|c: char| c == '=' || c == '-' || c == ' ');
+                    if let Ok(raw_line) = line {
+                        let clean = strip_ansi(&raw_line);
+                        let trimmed = clean.trim();
+
+                        // Match install.sh output patterns:
+                        //   "==> Step description"   — major step header
+                        //   "  OK: detail"            — success substep
+                        //   "  WARN: detail"          — warning
+                        //   "  ERROR: detail"         — failure
+                        //   "Installation complete!"  — final banner
+                        if trimmed.starts_with("==>") {
+                            let msg = trimmed.trim_start_matches("==>").trim();
                             if !msg.is_empty() {
                                 send_status(window, msg);
                             }
+                        } else if trimmed.starts_with("OK:") {
+                            let msg = trimmed.trim_start_matches("OK:").trim();
+                            if !msg.is_empty() {
+                                send_status(window, msg);
+                            }
+                        } else if trimmed.starts_with("WARN:") || trimmed.starts_with("ERROR:") {
+                            send_status(window, trimmed);
+                        } else if trimmed.contains("Installation complete!") {
+                            send_status(window, "Installation complete!");
                         }
-                        eprintln!("[install.sh] {}", line);
+
+                        eprintln!("[install.sh] {}", trimmed);
                     }
                 }
             }
