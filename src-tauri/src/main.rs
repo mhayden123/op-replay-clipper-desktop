@@ -527,18 +527,22 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         Err(_) => extra_paths,
     };
 
+    // Run install.sh with stderr merged into stdout (2>&1) so git errors
+    // and build failures are visible in the progress stream instead of lost.
+    let cmd = format!("exec bash {} 2>&1", script.to_string_lossy());
     let result = Command::new("bash")
-        .arg(&script)
+        .args(["-c", &cmd])
         .current_dir(project_dir)
         .env("PATH", &path)
+        .env("HOME", &home)
         .env("SKIP_APT", "1")
-        // Disable git credential helpers — all cloned repos are public and
-        // the user's gh-based helper may not be accessible from the AppImage.
+        // Bypass user's global git config entirely — all repos cloned by
+        // install.sh are public, no credentials or user prefs are needed.
+        // This prevents gh credential helpers (or any other helper) from
+        // crashing git with exit 128 inside the AppImage environment.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "")
-        .env("GIT_CONFIG_COUNT", "1")
-        .env("GIT_CONFIG_KEY_0", "credential.helper")
-        .env("GIT_CONFIG_VALUE_0", "")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
@@ -896,6 +900,15 @@ fn startup_sequence(
             let openpilot_root = std::env::var("OPENPILOT_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| data_dir().join("openpilot"));
+
+            // Clean up partial openpilot clone from a previous failed attempt.
+            // If the directory exists but .git doesn't, git clone will refuse
+            // to clone into a non-empty directory (exit 128).
+            if openpilot_root.exists() && !openpilot_root.join(".git").exists() {
+                eprintln!("[bootstrap] Removing partial openpilot clone at {:?}", openpilot_root);
+                let _ = fs::remove_dir_all(&openpilot_root);
+            }
+
             if !openpilot_root.join(".venv/bin/python").exists() {
                 send_status(win, "Installing dependencies — this takes 10-20 minutes...");
                 if !run_install_script(win, &project) {
