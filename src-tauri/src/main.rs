@@ -452,6 +452,30 @@ fn stop_server(process: &mut Option<Child>) {
 // Linux/macOS bootstrap — runs automatically when dependencies are missing
 // ---------------------------------------------------------------------------
 
+/// Check whether the user has cached sudo credentials.
+///
+/// openpilot's own installer (invoked by install.sh) calls `sudo apt-get`
+/// independently of our `SKIP_APT=1` flag. If credentials aren't cached,
+/// the prompt appears in the subprocess's stdin — which is invisible from
+/// the Tauri UI — and the install hangs silently. This check surfaces the
+/// requirement up-front with a clear actionable message.
+///
+/// Returns true if `sudo -n true` succeeds (passwordless sudo OR cached
+/// credentials). Returns false if sudo isn't installed or a password is
+/// required.
+#[cfg(not(target_os = "windows"))]
+fn check_sudo_available() -> bool {
+    match Command::new("sudo")
+        .args(["-n", "true"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(s) => s.success(),
+        Err(_) => false,
+    }
+}
+
 /// Install uv via the official installer script and verify it exists.
 #[cfg(not(target_os = "windows"))]
 fn install_uv(window: &tauri::WebviewWindow) -> bool {
@@ -578,13 +602,33 @@ fn strip_ansi(s: &str) -> String {
 /// Run install.sh from the project directory with live progress to the UI.
 #[cfg(not(target_os = "windows"))]
 fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Path) -> bool {
-    use std::io::BufRead;
+    use std::io::{BufRead, Write};
 
     let script = project_dir.join("install.sh");
     if !script.exists() {
         eprintln!("[bootstrap] install.sh not found at {:?}", script);
         return false;
     }
+
+    // Open the install log (truncate each run) so users can diagnose failures.
+    // install.sh produces a lot of output; the UI only shows progress markers,
+    // so without this file the full build output is unrecoverable.
+    let install_log_path = data_dir().join("install.log");
+    let mut install_log = match fs::File::create(&install_log_path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("[bootstrap] Warning: could not open install log: {}", e);
+            None
+        }
+    };
+    if let Some(ref mut log) = install_log {
+        let _ = writeln!(log, "=== GlideKit install.sh log ===");
+        let _ = writeln!(log, "project_dir: {:?}", project_dir);
+        let _ = writeln!(log, "script: {:?}", script);
+        let _ = writeln!(log, "---");
+        let _ = log.flush();
+    }
+    eprintln!("[bootstrap] install.sh log: {:?}", install_log_path);
 
     eprintln!("[bootstrap] Running install.sh in {:?}", project_dir);
     send_status(window, "Running install script — this may take a while...");
@@ -639,6 +683,11 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
                     if let Ok(raw_line) = line {
                         let clean = strip_ansi(&raw_line);
                         let trimmed = clean.trim();
+
+                        // Persist every line to install.log for post-mortem diagnosis.
+                        if let Some(ref mut log) = install_log {
+                            let _ = writeln!(log, "{}", clean);
+                        }
 
                         // Match install.sh output patterns:
                         //   "==> Step description"   — major step header
@@ -993,11 +1042,21 @@ fn startup_sequence(
             }
 
             if !openpilot_root.join(".venv/bin/python").exists() {
+                // openpilot's installer calls `sudo apt-get` on its own.
+                // Without cached credentials, the prompt is invisible in the
+                // subprocess and the install hangs silently.
+                if !check_sudo_available() {
+                    send_error(
+                        win,
+                        "Installing openpilot requires sudo access.\n\nOpen a terminal and run:\n  sudo -v\n\nThen re-launch GlideKit. Credentials will be cached for ~15 minutes, long enough for the install to finish.",
+                    );
+                    return;
+                }
                 send_status(win, "Installing dependencies — this takes 10-20 minutes...");
                 if !run_install_script(win, &project) {
                     send_error(
                         win,
-                        "Install script failed. You may need to install system packages first.\n\nOpen a terminal and run:\n  sudo apt-get install -y build-essential cmake ffmpeg git curl\n  cd ~/glidekit-native && ./install.sh",
+                        "Install script failed.\n\nCheck the log for the actual error:\n  ~/.glidekit/install.log\n\nCommon causes:\n  - Missing system packages — open a terminal and run:\n      sudo apt-get install -y build-essential cmake ffmpeg git curl git-lfs\n  - Sudo credentials not cached — run `sudo -v` in a terminal first\n  - Then re-launch GlideKit",
                     );
                     return;
                 }
