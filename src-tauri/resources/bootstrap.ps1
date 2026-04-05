@@ -522,7 +522,7 @@ if (Test-Path $clipPy) {
 } else {
     Write-Step 'Cloning glidekit'
     try {
-        $r = Invoke-Native 'git' @('clone', 'https://github.com/mhayden123/glidekit.git', $ProjectDir)
+        $r = Invoke-Native 'git' @('clone', 'https://github.com/mhayden123/glidekit-native.git', $ProjectDir)
         Write-Host ('  git clone exit code: ' + $r.ExitCode)
         if ($r.Output) { Write-Host ('  ' + $r.Output) }
         if (Test-Path (Join-Path $ProjectDir 'clip.py')) {
