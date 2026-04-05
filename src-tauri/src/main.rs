@@ -153,6 +153,10 @@ fn resolve_uv() -> Option<String> {
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .status()
         .is_ok()
     {
@@ -209,6 +213,10 @@ fn check_nvidia() -> bool {
         .arg("-L")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -313,6 +321,10 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     let sync_status = Command::new(uv_path)
         .args(["sync"])
         .current_dir(project_dir)
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -339,6 +351,10 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         .env("OPENPILOT_ROOT", openpilot_dir.to_string_lossy().as_ref())
         .env("GLIDEKIT_OUTPUT_DIR", output_dir.to_string_lossy().as_ref())
         .env("GLIDEKIT_DATA_DIR", data_dir_path.to_string_lossy().as_ref())
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -409,6 +425,8 @@ fn install_uv(window: &tauri::WebviewWindow) -> bool {
         .env("HOME", &home)
         .env_remove("LD_LIBRARY_PATH")
         .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -465,6 +483,8 @@ fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
         ])
         .env_remove("LD_LIBRARY_PATH")
         .env_remove("LD_PRELOAD")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .stdout(Stdio::null())
@@ -553,6 +573,11 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         // Child processes (git, cmake, scons) must use the system's own libs.
         .env_remove("LD_LIBRARY_PATH")
         .env_remove("LD_PRELOAD")
+        // Clear AppImage's PYTHONHOME/PYTHONPATH — the bundled Python stdlib
+        // breaks uv's build isolation, causing "No module named 'encodings'"
+        // when hatchling tries to build openpilot as an editable install.
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
