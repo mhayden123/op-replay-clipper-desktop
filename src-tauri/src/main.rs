@@ -20,7 +20,7 @@ use tauri::Manager;
 
 const SERVER_URL: &str = "http://localhost:7860";
 const HEALTH_URL: &str = "http://localhost:7860/api/health";
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
 // ---------------------------------------------------------------------------
 // App state
@@ -43,6 +43,16 @@ fn data_dir() -> PathBuf {
         eprintln!("Warning: failed to create data directory {:?}: {}", dir, e);
     }
     dir
+}
+
+/// Resolve the openpilot root directory.
+/// Honors the `OPENPILOT_ROOT` env var; falls back to `~/.glidekit/openpilot`.
+/// Used by both `check_environment` and `start_server` so the check and the
+/// server-side env agree on the path.
+fn openpilot_root() -> PathBuf {
+    std::env::var("OPENPILOT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir().join("openpilot"))
 }
 
 /// Read a string value from the app's registry key (Windows only).
@@ -182,7 +192,16 @@ fn resolve_uv() -> Option<String> {
         }
         paths
     } else {
-        vec![home.join(".local/bin/uv"), home.join(".cargo/bin/uv")]
+        // Linux + macOS: check common install locations
+        vec![
+            home.join(".local/bin/uv"),
+            home.join(".cargo/bin/uv"),
+            home.join(".local/share/uv/bin/uv"),
+            PathBuf::from("/usr/local/bin/uv"),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/opt/homebrew/bin/uv"),          // macOS Apple Silicon Homebrew
+            PathBuf::from("/home/linuxbrew/.linuxbrew/bin/uv"), // Linux Homebrew
+        ]
     };
 
     for path in &candidates {
@@ -287,10 +306,7 @@ fn check_environment() -> Result<(PathBuf, String), String> {
 
     // On Linux/macOS, also need openpilot for UI renders
     if !cfg!(windows) {
-        let openpilot_root = std::env::var("OPENPILOT_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| data_dir().join("openpilot"));
-        let python_path = openpilot_root.join(".venv/bin/python");
+        let python_path = openpilot_root().join(".venv/bin/python");
         if !python_path.exists() {
             return Err("openpilot_not_installed".into());
         }
@@ -304,7 +320,9 @@ fn check_environment() -> Result<(PathBuf, String), String> {
 // ---------------------------------------------------------------------------
 
 fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
-    let openpilot_dir = data_dir().join("openpilot");
+    use std::io::Write;
+
+    let openpilot_dir = openpilot_root();
     let output_dir = data_dir().join("output");
     let data_dir_path = data_dir().join("data");
 
@@ -315,9 +333,30 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         eprintln!("Warning: failed to create data directory {:?}: {}", data_dir_path, e);
     }
 
+    // Open the server log file (truncate on each launch). stdout/stderr from
+    // `uv sync` and `uvicorn` are redirected here so Linux users can diagnose
+    // startup failures — otherwise the output is lost and "Server failed to
+    // start" gives the user nothing to work with.
+    let log_path = data_dir().join("server.log");
+    let mut log = fs::File::create(&log_path)
+        .map_err(|e| format!("Failed to open server log at {:?}: {}", log_path, e))?;
+    let _ = writeln!(log, "=== GlideKit server log ===");
+    let _ = writeln!(log, "project_dir: {:?}", project_dir);
+    let _ = writeln!(log, "uv_path: {}", uv_path);
+    let _ = writeln!(log, "openpilot_root: {:?}", openpilot_dir);
+    let _ = writeln!(log, "--- uv sync ---");
+    let _ = log.flush();
+    eprintln!("[server] Server log: {:?}", log_path);
+
     // Ensure Python dependencies are installed before starting the server.
     // Without this, `uv run` may fail if .venv/ doesn't exist yet.
     eprintln!("[server] Running uv sync in {:?}", project_dir);
+    let sync_stdout = log
+        .try_clone()
+        .map_err(|e| format!("Failed to clone log handle: {}", e))?;
+    let sync_stderr = log
+        .try_clone()
+        .map_err(|e| format!("Failed to clone log handle: {}", e))?;
     let sync_status = Command::new(uv_path)
         .args(["sync"])
         .current_dir(project_dir)
@@ -325,8 +364,8 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         .env_remove("LD_PRELOAD")
         .env_remove("PYTHONHOME")
         .env_remove("PYTHONPATH")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(sync_stdout))
+        .stderr(Stdio::from(sync_stderr))
         .status();
     match sync_status {
         Ok(s) if s.success() => eprintln!("[server] uv sync completed"),
@@ -334,6 +373,15 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         Err(e) => eprintln!("[server] uv sync failed to run: {} (continuing anyway)", e),
     }
 
+    let _ = writeln!(log, "--- uvicorn ---");
+    let _ = log.flush();
+
+    let server_stdout = log
+        .try_clone()
+        .map_err(|e| format!("Failed to clone log handle: {}", e))?;
+    let server_stderr = log
+        .try_clone()
+        .map_err(|e| format!("Failed to clone log handle: {}", e))?;
     let child = Command::new(uv_path)
         .args([
             "run",
@@ -342,7 +390,7 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
             "uvicorn",
             "web.server:app",
             "--host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--port",
             "7860",
         ])
@@ -355,8 +403,8 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         .env_remove("LD_PRELOAD")
         .env_remove("PYTHONHOME")
         .env_remove("PYTHONPATH")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(server_stdout))
+        .stderr(Stdio::from(server_stderr))
         .spawn()
         .map_err(|e| format!("Failed to start server: {}", e))?;
 
@@ -1038,7 +1086,7 @@ fn startup_sequence(
         }
         send_error(
             win,
-            "Server failed to start. Check that GlideKit is installed correctly.",
+            "Server failed to start.\n\nCheck the log for details:\n  ~/.glidekit/server.log\n\nCommon fixes:\n  - Port 7860 already in use (close other GlideKit instances)\n  - Missing dependencies: cd ~/glidekit-native && ./install.sh",
         );
         return;
     }
