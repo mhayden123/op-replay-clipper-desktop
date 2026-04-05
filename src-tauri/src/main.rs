@@ -492,7 +492,7 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         .arg(&script)
         .current_dir(project_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn();
 
     match result {
