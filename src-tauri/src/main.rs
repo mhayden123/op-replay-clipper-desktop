@@ -367,6 +367,146 @@ fn stop_server(process: &mut Option<Child>) {
 }
 
 // ---------------------------------------------------------------------------
+// Linux/macOS bootstrap — runs automatically when dependencies are missing
+// ---------------------------------------------------------------------------
+
+/// Install uv via the official installer script.
+#[cfg(not(target_os = "windows"))]
+fn install_uv(window: &tauri::WebviewWindow) -> bool {
+    eprintln!("[bootstrap] Installing uv...");
+    send_status(window, "Installing uv package manager...");
+
+    let result = Command::new("sh")
+        .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match result {
+        Ok(s) if s.success() => {
+            eprintln!("[bootstrap] uv installed successfully");
+            true
+        }
+        Ok(s) => {
+            eprintln!("[bootstrap] uv install failed (exit code {:?})", s.code());
+            false
+        }
+        Err(e) => {
+            eprintln!("[bootstrap] Failed to run uv installer: {}", e);
+            false
+        }
+    }
+}
+
+/// Clone the glidekit-native project to ~/glidekit-native.
+#[cfg(not(target_os = "windows"))]
+fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let target = home.join("glidekit-native");
+
+    if target.join("clip.py").exists() {
+        eprintln!("[bootstrap] Project already exists at {:?}", target);
+        return Some(target);
+    }
+
+    eprintln!("[bootstrap] Cloning glidekit-native...");
+    send_status(window, "Downloading GlideKit...");
+
+    let result = Command::new("git")
+        .args([
+            "clone",
+            "--depth", "1",
+            "https://github.com/mhayden123/glidekit-native.git",
+            &target.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match result {
+        Ok(s) if s.success() && target.join("clip.py").exists() => {
+            eprintln!("[bootstrap] Cloned to {:?}", target);
+            Some(target)
+        }
+        Ok(s) => {
+            eprintln!("[bootstrap] git clone failed (exit code {:?})", s.code());
+            None
+        }
+        Err(e) => {
+            eprintln!("[bootstrap] Failed to run git: {}", e);
+            None
+        }
+    }
+}
+
+/// Run install.sh from the project directory with live progress to the UI.
+#[cfg(not(target_os = "windows"))]
+fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Path) -> bool {
+    use std::io::BufRead;
+
+    let script = project_dir.join("install.sh");
+    if !script.exists() {
+        eprintln!("[bootstrap] install.sh not found at {:?}", script);
+        return false;
+    }
+
+    eprintln!("[bootstrap] Running install.sh in {:?}", project_dir);
+    send_status(window, "Running install script — this may take a while...");
+
+    let result = Command::new("bash")
+        .arg(&script)
+        .current_dir(project_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match result {
+        Ok(mut child) => {
+            // Stream stdout for progress
+            if let Some(stdout) = child.stdout.take() {
+                let reader = std::io::BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        // Show section headers and status markers
+                        if line.starts_with("===")
+                            || line.starts_with("---")
+                            || line.contains("[OK]")
+                            || line.contains("[SKIP]")
+                            || line.contains("Step ")
+                        {
+                            let msg = line.trim_matches(|c: char| c == '=' || c == '-' || c == ' ');
+                            if !msg.is_empty() {
+                                send_status(window, msg);
+                            }
+                        }
+                        eprintln!("[install.sh] {}", line);
+                    }
+                }
+            }
+
+            match child.wait() {
+                Ok(s) if s.success() => {
+                    eprintln!("[bootstrap] install.sh completed successfully");
+                    true
+                }
+                Ok(s) => {
+                    eprintln!("[bootstrap] install.sh failed (exit code {:?})", s.code());
+                    false
+                }
+                Err(e) => {
+                    eprintln!("[bootstrap] install.sh wait error: {}", e);
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[bootstrap] Failed to launch install.sh: {}", e);
+            false
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Windows bootstrap — runs automatically when project is missing
 // ---------------------------------------------------------------------------
 
@@ -625,23 +765,79 @@ fn startup_sequence(
             }
         }
 
-        // On Linux/macOS or non-recoverable Windows errors: show platform-specific message
+        // On Linux/macOS: auto-bootstrap if dependencies are missing
+        #[cfg(not(target_os = "windows"))]
+        Err(ref reason)
+            if reason == "project_not_found"
+                || reason == "uv_not_found"
+                || reason == "openpilot_not_installed" =>
+        {
+            eprintln!("Environment not ready ({}), starting bootstrap...", reason);
+            send_status(win, "First-time setup — this may take a while...");
+
+            // Step 1: Install uv if missing
+            if resolve_uv().is_none() {
+                if !install_uv(win) {
+                    send_error(win, "Failed to install uv. Check your internet connection and try again.");
+                    return;
+                }
+            }
+
+            // Step 2: Clone project if missing
+            let project = if find_glidekit_project().is_none() {
+                match clone_project(win) {
+                    Some(p) => p,
+                    None => {
+                        send_error(win, "Failed to download GlideKit. Check your internet connection and try again.");
+                        return;
+                    }
+                }
+            } else {
+                find_glidekit_project().unwrap()
+            };
+
+            // Step 3: Run install.sh if openpilot isn't set up
+            let openpilot_root = std::env::var("OPENPILOT_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| data_dir().join("openpilot"));
+            if !openpilot_root.join(".venv/bin/python").exists() {
+                send_status(win, "Installing dependencies — this takes 10-20 minutes...");
+                if !run_install_script(win, &project) {
+                    send_error(
+                        win,
+                        "Install script failed. Try running it manually:\ncd ~/glidekit-native && ./install.sh",
+                    );
+                    return;
+                }
+            }
+
+            send_status(win, "Setup complete! Starting server...");
+
+            // Re-check environment after bootstrap
+            match check_environment() {
+                Ok(env) => env,
+                Err(retry_reason) => {
+                    eprintln!("[startup] Post-bootstrap check failed: {}", retry_reason);
+                    send_error(
+                        win,
+                        &format!(
+                            "Setup completed but environment is still not ready ({}).\nTry running: cd ~/glidekit-native && ./install.sh",
+                            retry_reason
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Non-recoverable errors (Windows post-bootstrap failures)
         Err(reason) => {
             let msg = match reason.as_str() {
-                "project_not_found" if cfg!(target_os = "macos") => {
-                    "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
-                }
-                "project_not_found" if cfg!(windows) => {
+                "project_not_found" => {
                     "Setup failed — GlideKit project not found after bootstrap."
                 }
-                "project_not_found" => {
-                    "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
-                }
-                "uv_not_found" if cfg!(windows) => {
-                    "uv not found after setup. Try reinstalling the application."
-                }
                 "uv_not_found" => {
-                    "uv not found. Run ./install.sh in the GlideKit project directory."
+                    "uv not found after setup. Try reinstalling the application."
                 }
                 "openpilot_not_installed" => {
                     "openpilot not installed. Run ./install.sh in the GlideKit project directory."
