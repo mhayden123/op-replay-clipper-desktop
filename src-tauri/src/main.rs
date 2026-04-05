@@ -532,6 +532,13 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         .current_dir(project_dir)
         .env("PATH", &path)
         .env("SKIP_APT", "1")
+        // Disable git credential helpers — all cloned repos are public and
+        // the user's gh-based helper may not be accessible from the AppImage.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "credential.helper")
+        .env("GIT_CONFIG_VALUE_0", "")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
