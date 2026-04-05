@@ -454,11 +454,11 @@ fn stop_server(process: &mut Option<Child>) {
 
 /// Check whether the user has cached sudo credentials.
 ///
-/// openpilot's own installer (invoked by install.sh) calls `sudo apt-get`
-/// independently of our `SKIP_APT=1` flag. If credentials aren't cached,
-/// the prompt appears in the subprocess's stdin — which is invisible from
-/// the Tauri UI — and the install hangs silently. This check surfaces the
-/// requirement up-front with a clear actionable message.
+/// install.sh runs `sudo apt-get install` for build dependencies, and
+/// openpilot's own installer also calls `sudo apt-get`. If credentials
+/// aren't cached, the prompt appears in the subprocess's stdin — which is
+/// invisible from the Tauri UI — and the install hangs silently. This
+/// check surfaces the requirement up-front with a clear actionable message.
 ///
 /// Returns true if `sudo -n true` succeeds (passwordless sudo OR cached
 /// credentials). Returns false if sudo isn't installed or a password is
@@ -634,7 +634,8 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
     send_status(window, "Running install script — this may take a while...");
 
     // Ensure uv is findable by augmenting PATH with common install locations.
-    // Also skip apt — sudo hangs without a TTY.
+    // Sudo credentials are pre-checked in the startup_sequence so apt is safe
+    // to run here — it'll use cached credentials silently.
     let home = dirs::home_dir().unwrap_or_default();
     let extra_paths = format!(
         "{}:{}",
@@ -654,7 +655,6 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         .current_dir(project_dir)
         .env("PATH", &path)
         .env("HOME", &home)
-        .env("SKIP_APT", "1")
         // Bypass user's global git config entirely — all repos cloned by
         // install.sh are public, no credentials or user prefs are needed.
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
