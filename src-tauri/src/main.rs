@@ -488,9 +488,12 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
     eprintln!("[bootstrap] Running install.sh in {:?}", project_dir);
     send_status(window, "Running install script — this may take a while...");
 
+    // Skip apt — sudo hangs without a TTY. System packages must be
+    // installed manually or via the install.sh script run in a terminal.
     let result = Command::new("bash")
         .arg(&script)
         .current_dir(project_dir)
+        .env("SKIP_APT", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
@@ -853,7 +856,7 @@ fn startup_sequence(
                 if !run_install_script(win, &project) {
                     send_error(
                         win,
-                        "Install script failed. Try running it manually:\ncd ~/glidekit-native && ./install.sh",
+                        "Install script failed. You may need to install system packages first.\n\nOpen a terminal and run:\n  sudo apt-get install -y build-essential cmake ffmpeg git curl\n  cd ~/glidekit-native && ./install.sh",
                     );
                     return;
                 }
