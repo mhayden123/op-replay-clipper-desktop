@@ -7,17 +7,7 @@
     "frontendDist": "../src"
   },
   "app": {
-    "windows": [
-      {
-        "title": "GlideKit",
-        "width": 820,
-        "height": 920,
-        "minWidth": 600,
-        "minHeight": 700,
-        "center": true,
-        "resizable": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -39,7 +39,9 @@ fn data_dir() -> PathBuf {
     let dir = dirs::home_dir()
         .expect("Cannot determine home directory")
         .join(".glidekit");
-    fs::create_dir_all(&dir).ok();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("Warning: failed to create data directory {:?}: {}", dir, e);
+    }
     dir
 }
 
@@ -274,7 +276,10 @@ fn check_environment() -> Result<(PathBuf, String), String> {
 
     // On Linux/macOS, also need openpilot for UI renders
     if !cfg!(windows) {
-        let python_path = data_dir().join("openpilot/.venv/bin/python");
+        let openpilot_root = std::env::var("OPENPILOT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir().join("openpilot"));
+        let python_path = openpilot_root.join(".venv/bin/python");
         if !python_path.exists() {
             return Err("openpilot_not_installed".into());
         }
@@ -292,8 +297,12 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     let output_dir = data_dir().join("output");
     let data_dir_path = data_dir().join("data");
 
-    fs::create_dir_all(&output_dir).ok();
-    fs::create_dir_all(&data_dir_path).ok();
+    if let Err(e) = fs::create_dir_all(&output_dir) {
+        eprintln!("Warning: failed to create output directory {:?}: {}", output_dir, e);
+    }
+    if let Err(e) = fs::create_dir_all(&data_dir_path) {
+        eprintln!("Warning: failed to create data directory {:?}: {}", data_dir_path, e);
+    }
 
     let child = Command::new(uv_path)
         .args([
@@ -313,7 +322,7 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
         .env("GLIDEKIT_OUTPUT_DIR", output_dir.to_string_lossy().as_ref())
         .env("GLIDEKIT_DATA_DIR", data_dir_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to start server: {}", e))?;
 
@@ -324,10 +333,16 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
 fn wait_for_server() -> bool {
     eprintln!("Waiting for server...");
     let start = Instant::now();
-    let client = reqwest::blocking::Client::builder()
+    let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .unwrap();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to create HTTP client: {}", e);
+            return false;
+        }
+    };
 
     while start.elapsed() < STARTUP_TIMEOUT {
         if let Ok(resp) = client.get(HEALTH_URL).send() {
@@ -527,6 +542,201 @@ fn send_error(window: &tauri::WebviewWindow, msg: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Startup sequence (runs in background thread)
+// ---------------------------------------------------------------------------
+
+fn startup_sequence(
+    win: &tauri::WebviewWindow,
+    handle: &tauri::AppHandle,
+    #[allow(unused_variables)] clean_install: bool,
+    #[allow(unused_variables)] resource_path: &Option<PathBuf>,
+) {
+    // --- Phase 0: Clean install if requested via --clean ---
+    #[cfg(target_os = "windows")]
+    if clean_install {
+        eprintln!("[startup] --clean: deleting project directory");
+        send_status(win, "Clean install - removing old files...");
+        let project = data_dir().join("glidekit");
+        if project.exists() {
+            let _ = fs::remove_dir_all(&project);
+        }
+        let marker = data_dir().join("bootstrap-complete");
+        let _ = fs::remove_file(&marker);
+    }
+
+    // --- Phase 1: Ensure environment is ready ---
+    send_status(win, "Checking environment...");
+    let env_result = check_environment();
+
+    let (project_dir, uv_path) = match env_result {
+        Ok(env) => env,
+
+        // On Windows: auto-bootstrap if project/uv is missing
+        #[cfg(target_os = "windows")]
+        Err(ref reason)
+            if reason == "project_not_found" || reason == "uv_not_found" =>
+        {
+            eprintln!(
+                "Environment not ready ({}), starting bootstrap...",
+                reason
+            );
+            send_status(win, if clean_install {
+                "Clean install - re-downloading all files..."
+            } else {
+                "First-time setup - this takes a few minutes..."
+            });
+
+            // Find the bootstrap script: bundled resources -> download from GitHub
+            let script = find_bootstrap_script(resource_path)
+                .or_else(|| {
+                    eprintln!("[startup] Bundled script not found, downloading...");
+                    send_status(win, "Downloading setup script...");
+                    download_bootstrap_script()
+                });
+
+            if let Some(ref script_path) = script {
+                if !run_bootstrap(win, script_path, clean_install) {
+                    send_error(
+                        win,
+                        "Setup failed. Check the log at:\n%LOCALAPPDATA%\\glidekit\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
+                    );
+                    return;
+                }
+                send_status(win, "Setup complete! Starting server...");
+            } else {
+                send_error(
+                    win,
+                    "Could not find or download the setup script. Check your internet connection and try reinstalling.",
+                );
+                return;
+            }
+
+            // Re-check environment after bootstrap
+            match check_environment() {
+                Ok(env) => env,
+                Err(retry_reason) => {
+                    eprintln!("[startup] Post-bootstrap check failed: {}", retry_reason);
+                    send_error(
+                        win,
+                        "Setup completed but environment is still not ready.\nCheck: %LOCALAPPDATA%\\glidekit\\bootstrap-app.log",
+                    );
+                    return;
+                }
+            }
+        }
+
+        // On Linux/macOS or non-recoverable Windows errors: show platform-specific message
+        Err(reason) => {
+            let msg = match reason.as_str() {
+                "project_not_found" if cfg!(target_os = "macos") => {
+                    "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
+                }
+                "project_not_found" if cfg!(windows) => {
+                    "Setup failed — GlideKit project not found after bootstrap."
+                }
+                "project_not_found" => {
+                    "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
+                }
+                "uv_not_found" if cfg!(windows) => {
+                    "uv not found after setup. Try reinstalling the application."
+                }
+                "uv_not_found" => {
+                    "uv not found. Run ./install.sh in the GlideKit project directory."
+                }
+                "openpilot_not_installed" => {
+                    "openpilot not installed. Run ./install.sh in the GlideKit project directory."
+                }
+                other => other,
+            };
+            send_error(win, msg);
+            return;
+        }
+    };
+
+    // --- Phase 2: Report platform capabilities ---
+    if cfg!(target_os = "macos") {
+        eprintln!("macOS — VideoToolbox hardware acceleration available.");
+    } else if check_nvidia() {
+        eprintln!("NVIDIA GPU detected.");
+    } else {
+        eprintln!("No NVIDIA GPU detected. CPU rendering will be used.");
+    }
+
+    if cfg!(windows) {
+        if check_wsl() {
+            eprintln!("WSL detected — UI render types available.");
+        } else {
+            eprintln!("WSL not detected — only non-UI render types available.");
+        }
+    }
+
+    // --- Phase 3: Start server ---
+    send_status(win, "Starting server...");
+    let child = match start_server(&project_dir, &uv_path) {
+        Ok(c) => c,
+        Err(msg) => {
+            send_error(win, &msg);
+            return;
+        }
+    };
+
+    let state = handle.state::<AppState>();
+    match state.server_process.lock() {
+        Ok(mut proc) => *proc = Some(child),
+        Err(_) => {
+            eprintln!("Failed to store server process handle");
+            send_error(win, "Internal error: could not track server process.");
+            return;
+        }
+    }
+
+    // --- Phase 4: Wait for server ---
+    send_status(win, "Waiting for server...");
+    if !wait_for_server() {
+        if let Ok(mut proc) = state.server_process.lock() {
+            stop_server(&mut proc);
+        }
+        send_error(
+            win,
+            "Server failed to start. Check that GlideKit is installed correctly.",
+        );
+        return;
+    }
+
+    // --- Phase 5: Redirect to web UI ---
+    let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
+
+    // --- Phase 6 (Windows): Check if WSL setup can continue ---
+    #[cfg(target_os = "windows")]
+    {
+        // Wait for the page to load, then check WSL status
+        thread::sleep(Duration::from_secs(2));
+        if check_wsl() {
+            // WSL exists — check if GlideKit setup is incomplete
+            if let Ok(client) = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+            {
+                if let Ok(resp) = client.get(&format!("{}/api/wsl/status", SERVER_URL)).send() {
+                    if let Ok(body) = resp.text() {
+                        let needs_setup = serde_json::from_str::<serde_json::Value>(&body)
+                            .map(|v| {
+                                v.get("glidekit_installed") == Some(&serde_json::Value::Bool(false))
+                                    || v.get("openpilot_installed") == Some(&serde_json::Value::Bool(false))
+                            })
+                            .unwrap_or(false);
+                        if needs_setup {
+                            eprintln!("[startup] WSL detected but GlideKit setup incomplete — prompting user");
+                            let _ = win.eval("setTimeout(function(){ showWslDialog(); }, 1000)");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -546,8 +756,14 @@ fn main() {
         .on_window_event(move |window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<AppState>();
-                let mut proc = state.server_process.lock().unwrap();
-                stop_server(&mut proc);
+                let mut guard = match state.server_process.lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        eprintln!("Warning: could not acquire lock to stop server");
+                        return;
+                    }
+                };
+                stop_server(&mut guard);
             }
         })
         .setup(move |app| {
@@ -562,180 +778,20 @@ fn main() {
             .build()?;
 
             let handle = app.handle().clone();
-            #[cfg(target_os = "windows")]
             let resource_path = app.path().resource_dir().ok();
 
             thread::spawn(move || {
-                let win = window;
-
-                // --- Phase 0: Clean install if requested via --clean ---
-                #[cfg(target_os = "windows")]
-                if clean_install {
-                    eprintln!("[startup] --clean: deleting project directory");
-                    send_status(&win, "Clean install - removing old files...");
-                    let project = data_dir().join("glidekit");
-                    if project.exists() {
-                        let _ = fs::remove_dir_all(&project);
-                    }
-                    let marker = data_dir().join("bootstrap-complete");
-                    let _ = fs::remove_file(&marker);
-                }
-
-                // --- Phase 1: Ensure environment is ready ---
-                send_status(&win, "Checking environment...");
-                let env_result = check_environment();
-
-                let (project_dir, uv_path) = match env_result {
-                    Ok(env) => env,
-
-                    // On Windows: auto-bootstrap if project/uv is missing
-                    #[cfg(target_os = "windows")]
-                    Err(ref reason)
-                        if reason == "project_not_found" || reason == "uv_not_found" =>
-                    {
-                        eprintln!(
-                            "Environment not ready ({}), starting bootstrap...",
-                            reason
-                        );
-                        send_status(&win, if clean_install {
-                            "Clean install - re-downloading all files..."
-                        } else {
-                            "First-time setup - this takes a few minutes..."
-                        });
-
-                        // Find the bootstrap script: bundled resources -> download from GitHub
-                        let script = find_bootstrap_script(&resource_path)
-                            .or_else(|| {
-                                eprintln!("[startup] Bundled script not found, downloading...");
-                                send_status(&win, "Downloading setup script...");
-                                download_bootstrap_script()
-                            });
-
-                        if let Some(ref script_path) = script {
-                            if !run_bootstrap(&win, script_path, clean_install) {
-                                send_error(
-                                    &win,
-                                    "Setup failed. Check the log at:\n%LOCALAPPDATA%\\glidekit\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
-                                );
-                                return;
-                            }
-                            send_status(&win, "Setup complete! Starting server...");
-                        } else {
-                            send_error(
-                                &win,
-                                "Could not find or download the setup script. Check your internet connection and try reinstalling.",
-                            );
-                            return;
-                        }
-
-                        // Re-check environment after bootstrap
-                        match check_environment() {
-                            Ok(env) => env,
-                            Err(retry_reason) => {
-                                eprintln!("[startup] Post-bootstrap check failed: {}", retry_reason);
-                                send_error(
-                                    &win,
-                                    "Setup completed but environment is still not ready.\nCheck: %LOCALAPPDATA%\\glidekit\\bootstrap-app.log",
-                                );
-                                return;
-                            }
-                        }
-                    }
-
-                    // On Linux/macOS or non-recoverable Windows errors: show platform-specific message
-                    Err(reason) => {
-                        let msg = match reason.as_str() {
-                            "project_not_found" if cfg!(target_os = "macos") => {
-                                "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
-                            }
-                            "project_not_found" if cfg!(windows) => {
-                                "Setup failed — GlideKit project not found after bootstrap."
-                            }
-                            "project_not_found" => {
-                                "GlideKit not found. Run: git clone https://github.com/mhayden123/glidekit && cd glidekit && ./install.sh"
-                            }
-                            "uv_not_found" if cfg!(windows) => {
-                                "uv not found after setup. Try reinstalling the application."
-                            }
-                            "uv_not_found" => {
-                                "uv not found. Run ./install.sh in the GlideKit project directory."
-                            }
-                            "openpilot_not_installed" => {
-                                "openpilot not installed. Run ./install.sh in the GlideKit project directory."
-                            }
-                            other => other,
-                        };
-                        send_error(&win, msg);
-                        return;
-                    }
-                };
-
-                // --- Phase 2: Report platform capabilities ---
-                if cfg!(target_os = "macos") {
-                    eprintln!("macOS — VideoToolbox hardware acceleration available.");
-                } else if check_nvidia() {
-                    eprintln!("NVIDIA GPU detected.");
-                } else {
-                    eprintln!("No NVIDIA GPU detected. CPU rendering will be used.");
-                }
-
-                if cfg!(windows) {
-                    if check_wsl() {
-                        eprintln!("WSL detected — UI render types available.");
-                    } else {
-                        eprintln!("WSL not detected — only non-UI render types available.");
-                    }
-                }
-
-                // --- Phase 3: Start server ---
-                send_status(&win, "Starting server...");
-                let child = match start_server(&project_dir, &uv_path) {
-                    Ok(c) => c,
-                    Err(msg) => {
-                        send_error(&win, &msg);
-                        return;
-                    }
-                };
-
-                let state = handle.state::<AppState>();
-                *state.server_process.lock().unwrap() = Some(child);
-
-                // --- Phase 4: Wait for server ---
-                send_status(&win, "Waiting for server...");
-                if !wait_for_server() {
-                    let mut proc = state.server_process.lock().unwrap();
-                    stop_server(&mut proc);
-                    send_error(
-                        &win,
-                        "Server failed to start. Check that GlideKit is installed correctly.",
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    startup_sequence(
+                        &window,
+                        &handle,
+                        clean_install,
+                        &resource_path,
                     );
-                    return;
-                }
-
-                // --- Phase 5: Redirect to web UI ---
-                let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
-
-                // --- Phase 6 (Windows): Check if WSL setup can continue ---
-                #[cfg(target_os = "windows")]
-                {
-                    // Wait for the page to load, then check WSL status
-                    thread::sleep(Duration::from_secs(2));
-                    if check_wsl() {
-                        // WSL exists — check if GlideKit setup is incomplete
-                        // Use the health endpoint since the server is running
-                        let client = reqwest::blocking::Client::builder()
-                            .timeout(Duration::from_secs(10))
-                            .build()
-                            .unwrap();
-                        if let Ok(resp) = client.get(&format!("{}/api/wsl/status", SERVER_URL)).send() {
-                            if let Ok(text) = resp.text() {
-                                if text.contains("\"glidekit_installed\":false") || text.contains("\"openpilot_installed\":false") {
-                                    eprintln!("[startup] WSL detected but GlideKit setup incomplete — prompting user");
-                                    let _ = win.eval("setTimeout(function(){ showWslDialog(); }, 1000)");
-                                }
-                            }
-                        }
-                    }
+                }));
+                if result.is_err() {
+                    eprintln!("[startup] Initialization thread panicked");
+                    send_error(&window, "An unexpected internal error occurred. Please restart the app.");
                 }
             });
 
