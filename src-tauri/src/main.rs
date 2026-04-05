@@ -402,10 +402,13 @@ fn install_uv(window: &tauri::WebviewWindow) -> bool {
         }
     };
 
-    // Run installer with HOME explicitly set (AppImage may not inherit it)
+    // Run installer with HOME explicitly set and AppImage's LD_LIBRARY_PATH
+    // cleared so curl uses the system's libcurl instead of the bundled one.
     let result = Command::new("sh")
         .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
         .env("HOME", &home)
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -460,6 +463,10 @@ fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
             "https://github.com/mhayden123/glidekit-native.git",
             &target.to_string_lossy(),
         ])
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -538,11 +545,14 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
         .env("SKIP_APT", "1")
         // Bypass user's global git config entirely — all repos cloned by
         // install.sh are public, no credentials or user prefs are needed.
-        // This prevents gh credential helpers (or any other helper) from
-        // crashing git with exit 128 inside the AppImage environment.
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
+        // Clear AppImage's LD_LIBRARY_PATH — the bundled libs (libcurl,
+        // libgnutls, etc.) conflict with system binaries like git-remote-https.
+        // Child processes (git, cmake, scons) must use the system's own libs.
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
