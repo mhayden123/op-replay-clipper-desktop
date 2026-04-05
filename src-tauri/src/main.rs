@@ -388,29 +388,52 @@ fn stop_server(process: &mut Option<Child>) {
 // Linux/macOS bootstrap — runs automatically when dependencies are missing
 // ---------------------------------------------------------------------------
 
-/// Install uv via the official installer script.
+/// Install uv via the official installer script and verify it exists.
 #[cfg(not(target_os = "windows"))]
 fn install_uv(window: &tauri::WebviewWindow) -> bool {
     eprintln!("[bootstrap] Installing uv...");
     send_status(window, "Installing uv package manager...");
 
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            eprintln!("[bootstrap] Cannot determine home directory");
+            return false;
+        }
+    };
+
+    // Run installer with HOME explicitly set (AppImage may not inherit it)
     let result = Command::new("sh")
         .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
+        .env("HOME", &home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
 
     match result {
-        Ok(s) if s.success() => {
-            eprintln!("[bootstrap] uv installed successfully");
-            true
-        }
-        Ok(s) => {
-            eprintln!("[bootstrap] uv install failed (exit code {:?})", s.code());
-            false
+        Ok(s) if !s.success() => {
+            eprintln!("[bootstrap] uv install script failed (exit code {:?})", s.code());
+            return false;
         }
         Err(e) => {
             eprintln!("[bootstrap] Failed to run uv installer: {}", e);
+            return false;
+        }
+        _ => {}
+    }
+
+    // Verify uv actually landed on disk
+    let uv_path = home.join(".local/bin/uv");
+    if uv_path.exists() {
+        eprintln!("[bootstrap] uv installed at {:?}", uv_path);
+        true
+    } else {
+        let cargo_path = home.join(".cargo/bin/uv");
+        if cargo_path.exists() {
+            eprintln!("[bootstrap] uv installed at {:?}", cargo_path);
+            true
+        } else {
+            eprintln!("[bootstrap] uv installer ran but binary not found");
             false
         }
     }
@@ -491,11 +514,23 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
     eprintln!("[bootstrap] Running install.sh in {:?}", project_dir);
     send_status(window, "Running install script — this may take a while...");
 
-    // Skip apt — sudo hangs without a TTY. System packages must be
-    // installed manually or via the install.sh script run in a terminal.
+    // Ensure uv is findable by augmenting PATH with common install locations.
+    // Also skip apt — sudo hangs without a TTY.
+    let home = dirs::home_dir().unwrap_or_default();
+    let extra_paths = format!(
+        "{}:{}",
+        home.join(".local/bin").display(),
+        home.join(".cargo/bin").display(),
+    );
+    let path = match std::env::var("PATH") {
+        Ok(p) => format!("{}:{}", extra_paths, p),
+        Err(_) => extra_paths,
+    };
+
     let result = Command::new("bash")
         .arg(&script)
         .current_dir(project_dir)
+        .env("PATH", &path)
         .env("SKIP_APT", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
