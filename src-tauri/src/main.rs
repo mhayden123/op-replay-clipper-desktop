@@ -102,10 +102,11 @@ fn find_glidekit_project() -> Option<PathBuf> {
         }
     }
 
-    // Sibling of the running executable
+    // Sibling of the running executable (prefer glidekit-native over glidekit)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             for ancestor in [parent, parent.parent().unwrap_or(parent)] {
+                candidates.push(ancestor.join("glidekit-native"));
                 candidates.push(ancestor.join("glidekit"));
                 if ancestor.join("clip.py").exists() {
                     return Some(ancestor.to_path_buf());
@@ -119,11 +120,13 @@ fn find_glidekit_project() -> Option<PathBuf> {
         if cwd.join("clip.py").exists() {
             return Some(cwd);
         }
+        candidates.push(cwd.join("glidekit-native"));
         candidates.push(cwd.join("glidekit"));
     }
 
-    // Home directory
+    // Home directory (prefer glidekit-native over glidekit)
     if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("glidekit-native"));
         candidates.push(home.join("glidekit"));
     }
 
