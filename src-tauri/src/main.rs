@@ -11,7 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
@@ -406,7 +406,7 @@ fn kill_stale_server() {
     }
 }
 
-fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
+fn start_server(project_dir: &Path, uv_path: &str) -> Result<Child, String> {
     use std::io::Write;
 
     // Kill any leftover server from a previous session that didn't clean up.
