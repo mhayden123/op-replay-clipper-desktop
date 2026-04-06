@@ -750,40 +750,38 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
             // Stream stdout for progress updates
             if let Some(stdout) = child.stdout.take() {
                 let reader = std::io::BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(raw_line) = line {
-                        let clean = strip_ansi(&raw_line);
-                        let trimmed = clean.trim();
+                for raw_line in reader.lines().map_while(Result::ok) {
+                    let clean = strip_ansi(&raw_line);
+                    let trimmed = clean.trim();
 
-                        // Persist every line to install.log for post-mortem diagnosis.
-                        if let Some(ref mut log) = install_log {
-                            let _ = writeln!(log, "{}", clean);
-                        }
-
-                        // Match install.sh output patterns:
-                        //   "==> Step description"   — major step header
-                        //   "  OK: detail"            — success substep
-                        //   "  WARN: detail"          — warning
-                        //   "  ERROR: detail"         — failure
-                        //   "Installation complete!"  — final banner
-                        if trimmed.starts_with("==>") {
-                            let msg = trimmed.trim_start_matches("==>").trim();
-                            if !msg.is_empty() {
-                                send_status(window, msg);
-                            }
-                        } else if trimmed.starts_with("OK:") {
-                            let msg = trimmed.trim_start_matches("OK:").trim();
-                            if !msg.is_empty() {
-                                send_status(window, msg);
-                            }
-                        } else if trimmed.starts_with("WARN:") || trimmed.starts_with("ERROR:") {
-                            send_status(window, trimmed);
-                        } else if trimmed.contains("Installation complete!") {
-                            send_status(window, "Installation complete!");
-                        }
-
-                        eprintln!("[install.sh] {}", trimmed);
+                    // Persist every line to install.log for post-mortem diagnosis.
+                    if let Some(ref mut log) = install_log {
+                        let _ = writeln!(log, "{}", clean);
                     }
+
+                    // Match install.sh output patterns:
+                    //   "==> Step description"   — major step header
+                    //   "  OK: detail"            — success substep
+                    //   "  WARN: detail"          — warning
+                    //   "  ERROR: detail"         — failure
+                    //   "Installation complete!"  — final banner
+                    if trimmed.starts_with("==>") {
+                        let msg = trimmed.trim_start_matches("==>").trim();
+                        if !msg.is_empty() {
+                            send_status(window, msg);
+                        }
+                    } else if trimmed.starts_with("OK:") {
+                        let msg = trimmed.trim_start_matches("OK:").trim();
+                        if !msg.is_empty() {
+                            send_status(window, msg);
+                        }
+                    } else if trimmed.starts_with("WARN:") || trimmed.starts_with("ERROR:") {
+                        send_status(window, trimmed);
+                    } else if trimmed.contains("Installation complete!") {
+                        send_status(window, "Installation complete!");
+                    }
+
+                    eprintln!("[install.sh] {}", trimmed);
                 }
             }
 
@@ -976,12 +974,12 @@ fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, clean:
 
 fn send_status(window: &tauri::WebviewWindow, msg: &str) {
     let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(&format!("updateStatus('{}')", escaped));
+    let _ = window.eval(format!("updateStatus('{}')", escaped));
 }
 
 fn send_error(window: &tauri::WebviewWindow, msg: &str) {
     let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(&format!("showError('{}')", escaped));
+    let _ = window.eval(format!("showError('{}')", escaped));
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,11 +1077,9 @@ fn startup_sequence(
             send_status(win, "First-time setup — this may take a while...");
 
             // Step 1: Install uv if missing
-            if resolve_uv().is_none() {
-                if !install_uv(win) {
-                    send_error(win, "Failed to install uv. Check your internet connection and try again.");
-                    return;
-                }
+            if resolve_uv().is_none() && !install_uv(win) {
+                send_error(win, "Failed to install uv. Check your internet connection and try again.");
+                return;
             }
 
             // Step 2: Clone project if missing
@@ -1222,7 +1218,7 @@ fn startup_sequence(
     }
 
     // --- Phase 5: Redirect to web UI ---
-    let _ = win.eval(&format!("window.location.href = '{}'", SERVER_URL));
+    let _ = win.eval(format!("window.location.href = '{}'", SERVER_URL));
 
     // --- Phase 6 (Windows): Check if WSL setup can continue ---
     #[cfg(target_os = "windows")]
@@ -1317,4 +1313,38 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("Error running Tauri application");
+}
+
+#[cfg(test)]
+#[cfg(not(target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn strip_ansi_removes_bold() {
+        assert_eq!(strip_ansi("\x1b[1mbold\x1b[0m text"), "bold text");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_plain_text() {
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+    }
+
+    #[test]
+    fn strip_ansi_handles_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn strip_ansi_handles_multiple_sequences() {
+        assert_eq!(
+            strip_ansi("\x1b[32m[OK]\x1b[0m: \x1b[1mbuild\x1b[0m done"),
+            "[OK]: build done"
+        );
+    }
 }
