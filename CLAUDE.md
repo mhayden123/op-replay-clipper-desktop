@@ -51,6 +51,14 @@ removed) to avoid AppImage-bundled-lib pollution.
 | `.github/workflows/release.yml` | Tag-triggered 4-platform release build |
 | `install.sh` | Linux/macOS dev bootstrap |
 
+## Testing
+
+- Unit tests live in `#[cfg(test)] mod tests` blocks at the bottom of each module
+- Tests that manipulate env vars must use `-- --test-threads=1`
+- Run all tests: `cd src-tauri && cargo test`
+- Run specific: `cargo test strip_ansi`
+- Run with env-var tests: `cargo test -- --test-threads=1`
+
 ## Commands
 
 ```bash
