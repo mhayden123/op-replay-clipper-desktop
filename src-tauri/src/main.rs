@@ -534,12 +534,40 @@ fn wait_for_server() -> bool {
 }
 
 fn stop_server(process: &mut Option<Child>) {
-    if let Some(mut child) = process.take() {
-        eprintln!("Stopping server (pid {})...", child.id());
-        let _ = child.kill();
-        let _ = child.wait();
-        eprintln!("Server stopped.");
+    let Some(mut child) = process.take() else { return };
+    let pid = child.id();
+    eprintln!("Stopping server (pid {})...", pid);
+
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    eprintln!("Server exited gracefully with {:?}", status.code());
+                    return;
+                }
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        eprintln!("Graceful shutdown timed out, sending SIGKILL");
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    eprintln!("Error waiting for server: {}", e);
+                    break;
+                }
+            }
+        }
     }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    eprintln!("Server stopped.");
 }
 
 // ---------------------------------------------------------------------------
