@@ -327,15 +327,15 @@ pub enum EnvError {
 
 /// Check that the GlideKit environment is ready to launch the server.
 /// Returns (project_dir, uv_path) on success.
-fn check_environment() -> Result<(PathBuf, String), String> {
-    let project_dir = find_glidekit_project().ok_or("project_not_found")?;
-    let uv_path = resolve_uv().ok_or("uv_not_found")?;
+fn check_environment() -> Result<(PathBuf, String), EnvError> {
+    let project_dir = find_glidekit_project().ok_or(EnvError::ProjectNotFound)?;
+    let uv_path = resolve_uv().ok_or(EnvError::UvNotFound)?;
 
     // On Linux/macOS, also need openpilot for UI renders
     if !cfg!(windows) {
         let python_path = openpilot_root().join(".venv/bin/python");
         if !python_path.exists() {
-            return Err("openpilot_not_installed".into());
+            return Err(EnvError::OpenpilotNotInstalled);
         }
     }
 
@@ -1036,12 +1036,10 @@ fn startup_sequence(
 
         // On Windows: auto-bootstrap if project/uv is missing
         #[cfg(target_os = "windows")]
-        Err(ref reason)
-            if reason == "project_not_found" || reason == "uv_not_found" =>
+        Err(EnvError::ProjectNotFound) | Err(EnvError::UvNotFound) =>
         {
             eprintln!(
-                "Environment not ready ({}), starting bootstrap...",
-                reason
+                "Environment not ready, starting bootstrap..."
             );
             send_status(win, if clean_install {
                 "Clean install - re-downloading all files..."
@@ -1090,12 +1088,9 @@ fn startup_sequence(
 
         // On Linux/macOS: auto-bootstrap if dependencies are missing
         #[cfg(not(target_os = "windows"))]
-        Err(ref reason)
-            if reason == "project_not_found"
-                || reason == "uv_not_found"
-                || reason == "openpilot_not_installed" =>
+        Err(EnvError::ProjectNotFound) | Err(EnvError::UvNotFound) | Err(EnvError::OpenpilotNotInstalled) =>
         {
-            eprintln!("Environment not ready ({}), starting bootstrap...", reason);
+            eprintln!("Environment not ready, starting bootstrap...");
             send_status(win, "First-time setup — this may take a while...");
 
             // Step 1: Install uv if missing
@@ -1171,18 +1166,12 @@ fn startup_sequence(
         }
 
         // Non-recoverable errors (Windows post-bootstrap failures)
-        Err(reason) => {
-            let msg = match reason.as_str() {
-                "project_not_found" => {
-                    "Setup failed — GlideKit project not found after bootstrap."
-                }
-                "uv_not_found" => {
-                    "uv not found after setup. Try reinstalling the application."
-                }
-                "openpilot_not_installed" => {
-                    "openpilot not installed. Run ./install.sh in the GlideKit project directory."
-                }
-                other => other,
+        #[cfg(target_os = "windows")]
+        Err(err) => {
+            let msg = match err {
+                EnvError::ProjectNotFound => "Setup failed — GlideKit project not found after bootstrap.",
+                EnvError::UvNotFound => "uv not found after setup. Try reinstalling the application.",
+                EnvError::OpenpilotNotInstalled => "openpilot not installed. Run ./install.sh in the GlideKit project directory.",
             };
             send_error(win, msg);
             return;
