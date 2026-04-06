@@ -12,9 +12,11 @@
 
 mod constants;
 mod env_sanitize;
+mod ipc;
 mod state;
 use constants::*;
 use env_sanitize::CommandExt;
+use ipc::{send_error, send_status};
 use state::AppState;
 
 use std::fs;
@@ -989,20 +991,6 @@ fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, clean:
             false
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Window communication
-// ---------------------------------------------------------------------------
-
-fn send_status(window: &tauri::WebviewWindow, msg: &str) {
-    let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(format!("updateStatus('{}')", escaped));
-}
-
-fn send_error(window: &tauri::WebviewWindow, msg: &str) {
-    let escaped = msg.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = window.eval(format!("showError('{}')", escaped));
 }
 
 // ---------------------------------------------------------------------------
