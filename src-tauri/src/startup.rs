@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use crate::bootstrap::{self, check_environment, EnvError};
 use crate::constants::*;
 use crate::ipc::{send_error, send_status};
-use crate::paths::{data_dir, find_glidekit_project, resolve_uv};
+#[cfg(target_os = "windows")]
+use crate::paths::data_dir;
+use crate::paths::{find_glidekit_project, openpilot_root, resolve_uv};
 use crate::platform::{check_nvidia, check_wsl};
 use crate::server::{start_server, stop_server, wait_for_server};
 use crate::state::AppState;
@@ -105,22 +107,19 @@ pub fn startup_sequence(
             }
 
             // Step 2: Clone project if missing
-            let project = if find_glidekit_project().is_none() {
-                match bootstrap::linux::clone_project(win) {
+            let project = match find_glidekit_project() {
+                Some(p) => p,
+                None => match bootstrap::linux::clone_project(win) {
                     Some(p) => p,
                     None => {
                         send_error(win, "Failed to download GlideKit. Check your internet connection and try again.");
                         return;
                     }
-                }
-            } else {
-                find_glidekit_project().unwrap()
+                },
             };
 
             // Step 3: Run install.sh if openpilot isn't set up
-            let openpilot_root = std::env::var("OPENPILOT_ROOT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| data_dir().join("openpilot"));
+            let openpilot_root = openpilot_root();
 
             // Clean up partial openpilot clone from a previous failed attempt.
             // If the directory exists but .git doesn't, git clone will refuse

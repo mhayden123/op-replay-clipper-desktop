@@ -22,7 +22,7 @@ Desktop wrapper, not a UI. It:
    `resources/bootstrap.ps1` (falls back to downloading it from GitHub).
 4. On Linux/macOS, requires `~/.glidekit/openpilot/.venv` (openpilot install).
 5. `uv sync` then spawns `uv run python -m uvicorn web.server:app --port 7860`.
-6. Polls `/api/health` (30s timeout), then loads `http://localhost:7860` in webview.
+6. Polls `/api/health` (90s timeout), then loads `http://localhost:7860` in webview.
 7. On window `Destroyed`, kills the child server.
 
 All server env is sanitized (`LD_LIBRARY_PATH`, `LD_PRELOAD`, `PYTHONHOME`, `PYTHONPATH`
@@ -92,7 +92,7 @@ Run with `--clean` to force wipe `~/.glidekit/glidekit/` and re-bootstrap (Windo
 
 - Server port: `7860` (hardcoded)
 - Data dir: `~/.glidekit/` (`data_dir()`)
-- Startup timeout: 30s
+- Startup timeout: 90s
 
 ## Where to Look
 
