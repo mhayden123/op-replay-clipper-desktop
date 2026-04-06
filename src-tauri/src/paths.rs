@@ -167,6 +167,28 @@ mod tests {
         }
         assert_ne!(found, Some(empty));
     }
+
+    #[test]
+    fn openpilot_root_respects_env_var() {
+        let prev = std::env::var("OPENPILOT_ROOT").ok();
+        unsafe { std::env::set_var("OPENPILOT_ROOT", "/custom/openpilot"); }
+        assert_eq!(openpilot_root(), PathBuf::from("/custom/openpilot"));
+        match prev {
+            Some(v) => unsafe { std::env::set_var("OPENPILOT_ROOT", v) },
+            None => unsafe { std::env::remove_var("OPENPILOT_ROOT") },
+        }
+    }
+
+    #[test]
+    fn openpilot_root_defaults_to_glidekit_subdir() {
+        let prev = std::env::var("OPENPILOT_ROOT").ok();
+        unsafe { std::env::remove_var("OPENPILOT_ROOT"); }
+        let root = openpilot_root();
+        assert!(root.ends_with(".glidekit/openpilot"));
+        if let Some(v) = prev {
+            unsafe { std::env::set_var("OPENPILOT_ROOT", v) };
+        }
+    }
 }
 
 /// Resolve the `uv` binary path.
