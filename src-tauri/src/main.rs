@@ -319,8 +319,79 @@ fn check_environment() -> Result<(PathBuf, String), String> {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
+/// Kill any stale server process that is still holding port 7860.
+///
+/// This can happen when a previous GlideKit session crashed or the window was
+/// closed without the child-process cleanup running (e.g. SIGKILL, power loss,
+/// or the old process bound to 0.0.0.0 before the 127.0.0.1 fix).
+///
+/// On Unix, we use `lsof` to find the PID; on Windows, `netstat` + `taskkill`.
+fn kill_stale_server() {
+    use std::net::TcpStream;
+
+    // Quick check: if nothing is listening, skip the heavier lsof/netstat call.
+    if TcpStream::connect("127.0.0.1:7860").is_err() {
+        // Also check 0.0.0.0 binding (legacy pre-fix servers).
+        if TcpStream::connect(("0.0.0.0", 7860u16)).is_err() {
+            return;
+        }
+    }
+
+    eprintln!("[server] Port 7860 is in use — killing stale server...");
+
+    #[cfg(unix)]
+    {
+        // `lsof -ti :7860` returns PIDs of processes listening on the port.
+        if let Ok(output) = Command::new("lsof")
+            .args(["-ti", ":7860"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            for pid_str in pids.split_whitespace() {
+                if let Ok(pid) = pid_str.parse::<i32>() {
+                    eprintln!("[server] Killing stale process pid {}", pid);
+                    unsafe { libc::kill(pid, libc::SIGTERM); }
+                }
+            }
+            // Give processes a moment to exit.
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // Find PID via netstat, then taskkill it.
+        if let Ok(output) = Command::new("cmd")
+            .args(["/C", "netstat -ano | findstr :7860 | findstr LISTENING"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(pid_str) = line.split_whitespace().last() {
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        eprintln!("[server] Killing stale process pid {}", pid);
+                        let _ = Command::new("taskkill")
+                            .args(["/F", "/PID", &pid.to_string()])
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
+}
+
 fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
     use std::io::Write;
+
+    // Kill any leftover server from a previous session that didn't clean up.
+    kill_stale_server();
 
     let openpilot_dir = openpilot_root();
     let output_dir = data_dir().join("output");
