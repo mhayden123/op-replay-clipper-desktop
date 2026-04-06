@@ -26,7 +26,10 @@ pub fn kill_stale_server() {
         }
     }
 
-    eprintln!("[server] Port {} is in use — killing stale server...", SERVER_PORT);
+    eprintln!(
+        "[server] Port {} is in use — killing stale server...",
+        SERVER_PORT
+    );
 
     #[cfg(unix)]
     {
@@ -42,7 +45,9 @@ pub fn kill_stale_server() {
             for pid_str in pids.split_whitespace() {
                 if let Ok(pid) = pid_str.parse::<i32>() {
                     eprintln!("[server] Killing stale process pid {}", pid);
-                    unsafe { libc::kill(pid, libc::SIGTERM); }
+                    unsafe {
+                        libc::kill(pid, libc::SIGTERM);
+                    }
                 }
             }
             // Give processes a moment to exit.
@@ -53,7 +58,10 @@ pub fn kill_stale_server() {
     #[cfg(windows)]
     {
         // Find PID via netstat, then taskkill it.
-        let netstat_cmd = format!("netstat -ano | findstr :{} | findstr LISTENING", SERVER_PORT);
+        let netstat_cmd = format!(
+            "netstat -ano | findstr :{} | findstr LISTENING",
+            SERVER_PORT
+        );
         if let Ok(output) = Command::new("cmd")
             .args(["/C", &netstat_cmd])
             .stdout(Stdio::piped())
@@ -89,10 +97,16 @@ pub fn start_server(project_dir: &Path, uv_path: &str) -> Result<Child, String> 
     let data_dir_path = data_dir().join("data");
 
     if let Err(e) = fs::create_dir_all(&output_dir) {
-        eprintln!("Warning: failed to create output directory {:?}: {}", output_dir, e);
+        eprintln!(
+            "Warning: failed to create output directory {:?}: {}",
+            output_dir, e
+        );
     }
     if let Err(e) = fs::create_dir_all(&data_dir_path) {
-        eprintln!("Warning: failed to create data directory {:?}: {}", data_dir_path, e);
+        eprintln!(
+            "Warning: failed to create data directory {:?}: {}",
+            data_dir_path, e
+        );
     }
 
     // Open the server log file (truncate on each launch). stdout/stderr from
@@ -128,7 +142,10 @@ pub fn start_server(project_dir: &Path, uv_path: &str) -> Result<Child, String> 
         .status();
     match sync_status {
         Ok(s) if s.success() => eprintln!("[server] uv sync completed"),
-        Ok(s) => eprintln!("[server] uv sync exited with {:?} (continuing anyway)", s.code()),
+        Ok(s) => eprintln!(
+            "[server] uv sync exited with {:?} (continuing anyway)",
+            s.code()
+        ),
         Err(e) => eprintln!("[server] uv sync failed to run: {} (continuing anyway)", e),
     }
 
@@ -157,7 +174,10 @@ pub fn start_server(project_dir: &Path, uv_path: &str) -> Result<Child, String> 
         .env("GLIDEKIT_HOME", data_dir().to_string_lossy().as_ref())
         .env("OPENPILOT_ROOT", openpilot_dir.to_string_lossy().as_ref())
         .env("GLIDEKIT_OUTPUT_DIR", output_dir.to_string_lossy().as_ref())
-        .env("GLIDEKIT_DATA_DIR", data_dir_path.to_string_lossy().as_ref())
+        .env(
+            "GLIDEKIT_DATA_DIR",
+            data_dir_path.to_string_lossy().as_ref(),
+        )
         .sanitize_env()
         .stdout(Stdio::from(server_stdout))
         .stderr(Stdio::from(server_stderr))
@@ -196,7 +216,9 @@ pub fn wait_for_server() -> bool {
 }
 
 pub fn stop_server(process: &mut Option<Child>) {
-    let Some(mut child) = process.take() else { return };
+    let Some(mut child) = process.take() else {
+        return;
+    };
     let pid = child.id();
     eprintln!("Stopping server (pid {})...", pid);
 

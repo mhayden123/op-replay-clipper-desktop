@@ -21,10 +21,10 @@ mod tests {
     fn sanitize_env_removes_pollution_vars() {
         let mut cmd = Command::new("env");
         cmd.env("LD_LIBRARY_PATH", "/fake")
-           .env("LD_PRELOAD", "/fake/lib")
-           .env("PYTHONHOME", "/fake/python")
-           .env("PYTHONPATH", "/fake/path")
-           .env("KEEP_ME", "value");
+            .env("LD_PRELOAD", "/fake/lib")
+            .env("PYTHONHOME", "/fake/python")
+            .env("PYTHONPATH", "/fake/path")
+            .env("KEEP_ME", "value");
         cmd.sanitize_env();
         let output = cmd.output().unwrap();
         let text = String::from_utf8_lossy(&output.stdout);

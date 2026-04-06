@@ -2,9 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use crate::env_sanitize::CommandExt;
 #[cfg(target_os = "windows")]
 use crate::constants::REGISTRY_KEY;
+use crate::env_sanitize::CommandExt;
 
 /// Get the app data directory (~/.glidekit).
 pub fn data_dir() -> PathBuf {
@@ -32,12 +32,7 @@ pub fn openpilot_root() -> PathBuf {
 #[cfg(target_os = "windows")]
 pub fn read_registry_string(name: &str) -> Option<String> {
     let output = Command::new("reg.exe")
-        .args([
-            "query",
-            REGISTRY_KEY,
-            "/v",
-            name,
-        ])
+        .args(["query", REGISTRY_KEY, "/v", name])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
@@ -77,7 +72,11 @@ pub fn find_glidekit_project() -> Option<PathBuf> {
     {
         if let Some(reg_path) = read_registry_string("ProjectDir") {
             let p = PathBuf::from(&reg_path);
-            eprintln!("[find-project] Registry ProjectDir: {:?} exists={}", p, p.join("clip.py").exists());
+            eprintln!(
+                "[find-project] Registry ProjectDir: {:?} exists={}",
+                p,
+                p.join("clip.py").exists()
+            );
             if p.join("clip.py").exists() {
                 return Some(p);
             }
@@ -143,7 +142,9 @@ mod tests {
         make_fake_project(&project);
 
         let prev = std::env::var("GLIDEKIT_PROJECT_DIR").ok();
-        unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", &project); }
+        unsafe {
+            std::env::set_var("GLIDEKIT_PROJECT_DIR", &project);
+        }
         let found = find_glidekit_project();
         match prev {
             Some(v) => unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", v) },
@@ -159,7 +160,9 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
 
         let prev = std::env::var("GLIDEKIT_PROJECT_DIR").ok();
-        unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", &empty); }
+        unsafe {
+            std::env::set_var("GLIDEKIT_PROJECT_DIR", &empty);
+        }
         let found = find_glidekit_project();
         match prev {
             Some(v) => unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", v) },
@@ -171,7 +174,9 @@ mod tests {
     #[test]
     fn openpilot_root_respects_env_var() {
         let prev = std::env::var("OPENPILOT_ROOT").ok();
-        unsafe { std::env::set_var("OPENPILOT_ROOT", "/custom/openpilot"); }
+        unsafe {
+            std::env::set_var("OPENPILOT_ROOT", "/custom/openpilot");
+        }
         assert_eq!(openpilot_root(), PathBuf::from("/custom/openpilot"));
         match prev {
             Some(v) => unsafe { std::env::set_var("OPENPILOT_ROOT", v) },
@@ -182,7 +187,9 @@ mod tests {
     #[test]
     fn openpilot_root_defaults_to_glidekit_subdir() {
         let prev = std::env::var("OPENPILOT_ROOT").ok();
-        unsafe { std::env::remove_var("OPENPILOT_ROOT"); }
+        unsafe {
+            std::env::remove_var("OPENPILOT_ROOT");
+        }
         let root = openpilot_root();
         assert!(root.ends_with(".glidekit/openpilot"));
         if let Some(v) = prev {
@@ -212,17 +219,45 @@ pub fn resolve_uv() -> Option<String> {
     let candidates: Vec<PathBuf> = if cfg!(windows) {
         // Search all known Windows install locations for uv.exe
         let mut paths = vec![
-            home.join("AppData").join("Roaming").join("Python").join("Python312").join("Scripts").join("uv.exe"),
-            home.join("AppData").join("Roaming").join("Python").join("Python313").join("Scripts").join("uv.exe"),
-            home.join("AppData").join("Roaming").join("Python").join("Scripts").join("uv.exe"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("Python")
+                .join("Python312")
+                .join("Scripts")
+                .join("uv.exe"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("Python")
+                .join("Python313")
+                .join("Scripts")
+                .join("uv.exe"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("Python")
+                .join("Scripts")
+                .join("uv.exe"),
             home.join(".local").join("bin").join("uv.exe"),
             home.join(".cargo").join("bin").join("uv.exe"),
         ];
         // Also check LOCALAPPDATA Python paths
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             let local = PathBuf::from(local);
-            paths.push(local.join("Programs").join("Python").join("Python312").join("Scripts").join("uv.exe"));
-            paths.push(local.join("Programs").join("Python").join("Python313").join("Scripts").join("uv.exe"));
+            paths.push(
+                local
+                    .join("Programs")
+                    .join("Python")
+                    .join("Python312")
+                    .join("Scripts")
+                    .join("uv.exe"),
+            );
+            paths.push(
+                local
+                    .join("Programs")
+                    .join("Python")
+                    .join("Python313")
+                    .join("Scripts")
+                    .join("uv.exe"),
+            );
         }
         paths
     } else {
@@ -231,16 +266,20 @@ pub fn resolve_uv() -> Option<String> {
             home.join(".local/bin/uv"),
             home.join(".cargo/bin/uv"),
             home.join(".local/share/uv/bin/uv"),
-            PathBuf::from("/usr/local/bin/uv"),                 // macOS Intel Homebrew + manual installs
-            PathBuf::from("/usr/bin/uv"),                       // system package manager
-            PathBuf::from("/opt/homebrew/bin/uv"),              // macOS Apple Silicon Homebrew
+            PathBuf::from("/usr/local/bin/uv"), // macOS Intel Homebrew + manual installs
+            PathBuf::from("/usr/bin/uv"),       // system package manager
+            PathBuf::from("/opt/homebrew/bin/uv"), // macOS Apple Silicon Homebrew
             PathBuf::from("/home/linuxbrew/.linuxbrew/bin/uv"), // Linux Homebrew
         ]
     };
 
     for path in &candidates {
         let exists = path.exists();
-        eprintln!("[resolve-uv]   {:?} -> {}", path, if exists { "FOUND" } else { "no" });
+        eprintln!(
+            "[resolve-uv]   {:?} -> {}",
+            path,
+            if exists { "FOUND" } else { "no" }
+        );
         if exists {
             let resolved = path.to_string_lossy().to_string();
             eprintln!("[resolve-uv] Using: {}", resolved);

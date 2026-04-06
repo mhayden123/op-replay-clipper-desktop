@@ -55,7 +55,10 @@ pub fn install_uv(window: &tauri::WebviewWindow) -> bool {
 
     match result {
         Ok(s) if !s.success() => {
-            eprintln!("[bootstrap] uv install script failed (exit code {:?})", s.code());
+            eprintln!(
+                "[bootstrap] uv install script failed (exit code {:?})",
+                s.code()
+            );
             return false;
         }
         Err(e) => {
@@ -98,7 +101,8 @@ pub fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
     let result = Command::new("git")
         .args([
             "clone",
-            "--depth", "1",
+            "--depth",
+            "1",
             GLIDEKIT_NATIVE_REPO,
             &target.to_string_lossy(),
         ])

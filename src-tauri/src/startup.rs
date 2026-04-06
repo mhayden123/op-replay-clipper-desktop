@@ -38,24 +38,23 @@ pub fn startup_sequence(
 
         // On Windows: auto-bootstrap if project/uv is missing
         #[cfg(target_os = "windows")]
-        Err(EnvError::ProjectNotFound) | Err(EnvError::UvNotFound) =>
-        {
-            eprintln!(
-                "Environment not ready, starting bootstrap..."
+        Err(EnvError::ProjectNotFound) | Err(EnvError::UvNotFound) => {
+            eprintln!("Environment not ready, starting bootstrap...");
+            send_status(
+                win,
+                if clean_install {
+                    "Clean install - re-downloading all files..."
+                } else {
+                    "First-time setup - this takes a few minutes..."
+                },
             );
-            send_status(win, if clean_install {
-                "Clean install - re-downloading all files..."
-            } else {
-                "First-time setup - this takes a few minutes..."
-            });
 
             // Find the bootstrap script: bundled resources -> download from GitHub
-            let script = bootstrap::windows::find_bootstrap_script(resource_path)
-                .or_else(|| {
-                    eprintln!("[startup] Bundled script not found, downloading...");
-                    send_status(win, "Downloading setup script...");
-                    bootstrap::windows::download_bootstrap_script()
-                });
+            let script = bootstrap::windows::find_bootstrap_script(resource_path).or_else(|| {
+                eprintln!("[startup] Bundled script not found, downloading...");
+                send_status(win, "Downloading setup script...");
+                bootstrap::windows::download_bootstrap_script()
+            });
 
             if let Some(ref script_path) = script {
                 if !bootstrap::windows::run_bootstrap(win, script_path, clean_install) {
@@ -90,14 +89,18 @@ pub fn startup_sequence(
 
         // On Linux/macOS: auto-bootstrap if dependencies are missing
         #[cfg(not(target_os = "windows"))]
-        Err(EnvError::ProjectNotFound) | Err(EnvError::UvNotFound) | Err(EnvError::OpenpilotNotInstalled) =>
-        {
+        Err(EnvError::ProjectNotFound)
+        | Err(EnvError::UvNotFound)
+        | Err(EnvError::OpenpilotNotInstalled) => {
             eprintln!("Environment not ready, starting bootstrap...");
             send_status(win, "First-time setup — this may take a while...");
 
             // Step 1: Install uv if missing
             if resolve_uv().is_none() && !bootstrap::linux::install_uv(win) {
-                send_error(win, "Failed to install uv. Check your internet connection and try again.");
+                send_error(
+                    win,
+                    "Failed to install uv. Check your internet connection and try again.",
+                );
                 return;
             }
 
@@ -123,7 +126,10 @@ pub fn startup_sequence(
             // If the directory exists but .git doesn't, git clone will refuse
             // to clone into a non-empty directory (exit 128).
             if openpilot_root.exists() && !openpilot_root.join(".git").exists() {
-                eprintln!("[bootstrap] Removing partial openpilot clone at {:?}", openpilot_root);
+                eprintln!(
+                    "[bootstrap] Removing partial openpilot clone at {:?}",
+                    openpilot_root
+                );
                 let _ = fs::remove_dir_all(&openpilot_root);
             }
 
@@ -171,9 +177,15 @@ pub fn startup_sequence(
         #[cfg(target_os = "windows")]
         Err(err) => {
             let msg = match err {
-                EnvError::ProjectNotFound => "Setup failed — GlideKit project not found after bootstrap.",
-                EnvError::UvNotFound => "uv not found after setup. Try reinstalling the application.",
-                EnvError::OpenpilotNotInstalled => "openpilot not installed. Run ./install.sh in the GlideKit project directory.",
+                EnvError::ProjectNotFound => {
+                    "Setup failed — GlideKit project not found after bootstrap."
+                }
+                EnvError::UvNotFound => {
+                    "uv not found after setup. Try reinstalling the application."
+                }
+                EnvError::OpenpilotNotInstalled => {
+                    "openpilot not installed. Run ./install.sh in the GlideKit project directory."
+                }
             };
             send_error(win, msg);
             return;
@@ -252,7 +264,8 @@ pub fn startup_sequence(
                         let needs_setup = serde_json::from_str::<serde_json::Value>(&body)
                             .map(|v| {
                                 v.get("glidekit_installed") == Some(&serde_json::Value::Bool(false))
-                                    || v.get("openpilot_installed") == Some(&serde_json::Value::Bool(false))
+                                    || v.get("openpilot_installed")
+                                        == Some(&serde_json::Value::Bool(false))
                             })
                             .unwrap_or(false);
                         if needs_setup {

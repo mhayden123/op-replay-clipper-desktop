@@ -71,16 +71,14 @@ fn main() {
 
             thread::spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    startup_sequence(
-                        &window,
-                        &handle,
-                        clean_install,
-                        &resource_path,
-                    );
+                    startup_sequence(&window, &handle, clean_install, &resource_path);
                 }));
                 if result.is_err() {
                     eprintln!("[startup] Initialization thread panicked");
-                    send_error(&window, "An unexpected internal error occurred. Please restart the app.");
+                    send_error(
+                        &window,
+                        "An unexpected internal error occurred. Please restart the app.",
+                    );
                 }
             });
 

@@ -38,7 +38,11 @@ pub fn find_bootstrap_script(resource_dir: &Option<PathBuf>) -> Option<PathBuf> 
     // Check all candidates
     for path in &candidates {
         let exists = path.exists();
-        eprintln!("[bootstrap-find]   {:?} -> {}", path, if exists { "FOUND" } else { "not found" });
+        eprintln!(
+            "[bootstrap-find]   {:?} -> {}",
+            path,
+            if exists { "FOUND" } else { "not found" }
+        );
         if exists {
             return Some(path.clone());
         }
@@ -77,7 +81,10 @@ pub fn download_bootstrap_script() -> Option<PathBuf> {
             Some(target)
         }
         Ok(s) => {
-            eprintln!("[bootstrap-download] Download failed (exit code {:?})", s.code());
+            eprintln!(
+                "[bootstrap-download] Download failed (exit code {:?})",
+                s.code()
+            );
             None
         }
         Err(e) => {
@@ -93,9 +100,19 @@ pub fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, cl
 
     eprintln!("[bootstrap-run] Script: {:?}", script);
     eprintln!("[bootstrap-run] Script exists: {}", script.exists());
-    eprintln!("[bootstrap-run] Script size: {:?}", fs::metadata(script).map(|m| m.len()));
+    eprintln!(
+        "[bootstrap-run] Script size: {:?}",
+        fs::metadata(script).map(|m| m.len())
+    );
     eprintln!("[bootstrap-run] Clean: {}", clean);
-    send_status(window, if clean { "Clean install - re-downloading all files..." } else { "Setting up GlideKit..." });
+    send_status(
+        window,
+        if clean {
+            "Clean install - re-downloading all files..."
+        } else {
+            "Setting up GlideKit..."
+        },
+    );
 
     fs::create_dir_all(data_dir()).ok();
 
