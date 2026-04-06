@@ -11,7 +11,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod constants;
+mod env_sanitize;
 use constants::*;
+use env_sanitize::CommandExt;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,18 +22,6 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Manager;
-
-trait CommandExt {
-    fn sanitize_env(&mut self) -> &mut Self;
-}
-impl CommandExt for Command {
-    fn sanitize_env(&mut self) -> &mut Self {
-        self.env_remove("LD_LIBRARY_PATH")
-            .env_remove("LD_PRELOAD")
-            .env_remove("PYTHONHOME")
-            .env_remove("PYTHONPATH")
-    }
-}
 
 
 // ---------------------------------------------------------------------------
@@ -1361,25 +1351,6 @@ mod tests {
     fn env_error_display_openpilot_not_installed() {
         let e = EnvError::OpenpilotNotInstalled;
         assert_eq!(e.to_string(), "openpilot is not installed");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn sanitize_env_removes_pollution_vars() {
-        let mut cmd = Command::new("env");
-        cmd.env("LD_LIBRARY_PATH", "/fake")
-           .env("LD_PRELOAD", "/fake/lib")
-           .env("PYTHONHOME", "/fake/python")
-           .env("PYTHONPATH", "/fake/path")
-           .env("KEEP_ME", "value");
-        cmd.sanitize_env();
-        let output = cmd.output().unwrap();
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(!text.contains("LD_LIBRARY_PATH"));
-        assert!(!text.contains("LD_PRELOAD"));
-        assert!(!text.contains("PYTHONHOME"));
-        assert!(!text.contains("PYTHONPATH"));
-        assert!(text.contains("KEEP_ME=value"));
     }
 
     #[cfg(not(target_os = "windows"))]
