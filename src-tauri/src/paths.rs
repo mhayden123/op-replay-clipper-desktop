@@ -126,6 +126,49 @@ pub fn find_glidekit_project() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.join("clip.py").exists())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_fake_project(dir: &std::path::Path) {
+        std::fs::write(dir.join("clip.py"), "# fake\n").unwrap();
+    }
+
+    #[test]
+    fn find_glidekit_project_respects_env_var() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-glidekit");
+        std::fs::create_dir_all(&project).unwrap();
+        make_fake_project(&project);
+
+        let prev = std::env::var("GLIDEKIT_PROJECT_DIR").ok();
+        unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", &project); }
+        let found = find_glidekit_project();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", v) },
+            None => unsafe { std::env::remove_var("GLIDEKIT_PROJECT_DIR") },
+        }
+        assert_eq!(found, Some(project));
+    }
+
+    #[test]
+    fn find_glidekit_project_skips_env_var_without_clip_py() {
+        let temp = TempDir::new().unwrap();
+        let empty = temp.path().join("empty-dir");
+        std::fs::create_dir_all(&empty).unwrap();
+
+        let prev = std::env::var("GLIDEKIT_PROJECT_DIR").ok();
+        unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", &empty); }
+        let found = find_glidekit_project();
+        match prev {
+            Some(v) => unsafe { std::env::set_var("GLIDEKIT_PROJECT_DIR", v) },
+            None => unsafe { std::env::remove_var("GLIDEKIT_PROJECT_DIR") },
+        }
+        assert_ne!(found, Some(empty));
+    }
+}
+
 /// Resolve the `uv` binary path.
 pub fn resolve_uv() -> Option<String> {
     let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
