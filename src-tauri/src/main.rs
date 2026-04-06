@@ -315,6 +315,16 @@ fn check_wsl() -> bool {
     false
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum EnvError {
+    #[error("GlideKit project not found")]
+    ProjectNotFound,
+    #[error("uv binary not found")]
+    UvNotFound,
+    #[error("openpilot is not installed")]
+    OpenpilotNotInstalled,
+}
+
 /// Check that the GlideKit environment is ready to launch the server.
 /// Returns (project_dir, uv_path) on success.
 fn check_environment() -> Result<(PathBuf, String), String> {
@@ -1328,10 +1338,26 @@ fn main() {
 }
 
 #[cfg(test)]
-#[cfg(not(target_os = "windows"))]
 mod tests {
     use super::*;
 
+    #[test]
+    fn env_error_display_project_not_found() {
+        let e = EnvError::ProjectNotFound;
+        assert_eq!(e.to_string(), "GlideKit project not found");
+    }
+    #[test]
+    fn env_error_display_uv_not_found() {
+        let e = EnvError::UvNotFound;
+        assert_eq!(e.to_string(), "uv binary not found");
+    }
+    #[test]
+    fn env_error_display_openpilot_not_installed() {
+        let e = EnvError::OpenpilotNotInstalled;
+        assert_eq!(e.to_string(), "openpilot is not installed");
+    }
+
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn sanitize_env_removes_pollution_vars() {
         let mut cmd = Command::new("env");
@@ -1350,26 +1376,31 @@ mod tests {
         assert!(text.contains("KEEP_ME=value"));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn strip_ansi_removes_color_codes() {
         assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn strip_ansi_removes_bold() {
         assert_eq!(strip_ansi("\x1b[1mbold\x1b[0m text"), "bold text");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn strip_ansi_preserves_plain_text() {
         assert_eq!(strip_ansi("no escapes here"), "no escapes here");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn strip_ansi_handles_empty_string() {
         assert_eq!(strip_ansi(""), "");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn strip_ansi_handles_multiple_sequences() {
         assert_eq!(
