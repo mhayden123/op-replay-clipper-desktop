@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bootstrap;
 mod constants;
 mod env_sanitize;
 mod ipc;
@@ -17,501 +18,21 @@ mod paths;
 mod platform;
 mod server;
 mod state;
+use bootstrap::{check_environment, EnvError};
 use constants::*;
 #[allow(unused_imports)]
 use env_sanitize::CommandExt;
 use ipc::{send_error, send_status};
-use paths::{data_dir, find_glidekit_project, openpilot_root, resolve_uv};
+use paths::{data_dir, find_glidekit_project, resolve_uv};
 use platform::{check_nvidia, check_wsl};
 use server::{start_server, stop_server, wait_for_server};
 use state::AppState;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use tauri::Manager;
-
-
-// ---------------------------------------------------------------------------
-// Environment checks
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, thiserror::Error)]
-pub enum EnvError {
-    #[error("GlideKit project not found")]
-    ProjectNotFound,
-    #[error("uv binary not found")]
-    UvNotFound,
-    #[error("openpilot is not installed")]
-    OpenpilotNotInstalled,
-}
-
-/// Check that the GlideKit environment is ready to launch the server.
-/// Returns (project_dir, uv_path) on success.
-fn check_environment() -> Result<(PathBuf, String), EnvError> {
-    let project_dir = find_glidekit_project().ok_or(EnvError::ProjectNotFound)?;
-    let uv_path = resolve_uv().ok_or(EnvError::UvNotFound)?;
-
-    // On Linux/macOS, also need openpilot for UI renders
-    if !cfg!(windows) {
-        let python_path = openpilot_root().join(".venv/bin/python");
-        if !python_path.exists() {
-            return Err(EnvError::OpenpilotNotInstalled);
-        }
-    }
-
-    Ok((project_dir, uv_path))
-}
-
-// ---------------------------------------------------------------------------
-// Linux/macOS bootstrap — runs automatically when dependencies are missing
-// ---------------------------------------------------------------------------
-
-/// Check whether the user has cached sudo credentials.
-///
-/// install.sh runs `sudo apt-get install` for build dependencies, and
-/// openpilot's own installer also calls `sudo apt-get`. If credentials
-/// aren't cached, the prompt appears in the subprocess's stdin — which is
-/// invisible from the Tauri UI — and the install hangs silently. This
-/// check surfaces the requirement up-front with a clear actionable message.
-///
-/// Returns true if `sudo -n true` succeeds (passwordless sudo OR cached
-/// credentials). Returns false if sudo isn't installed or a password is
-/// required.
-#[cfg(not(target_os = "windows"))]
-fn check_sudo_available() -> bool {
-    match Command::new("sudo")
-        .args(["-n", "true"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(s) => s.success(),
-        Err(_) => false,
-    }
-}
-
-/// Install uv via the official installer script and verify it exists.
-#[cfg(not(target_os = "windows"))]
-fn install_uv(window: &tauri::WebviewWindow) -> bool {
-    eprintln!("[bootstrap] Installing uv...");
-    send_status(window, "Installing uv package manager...");
-
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            eprintln!("[bootstrap] Cannot determine home directory");
-            return false;
-        }
-    };
-
-    // Run installer with HOME explicitly set and AppImage's LD_LIBRARY_PATH
-    // cleared so curl uses the system's libcurl instead of the bundled one.
-    let result = Command::new("sh")
-        .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
-        .env("HOME", &home)
-        .sanitize_env()
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    match result {
-        Ok(s) if !s.success() => {
-            eprintln!("[bootstrap] uv install script failed (exit code {:?})", s.code());
-            return false;
-        }
-        Err(e) => {
-            eprintln!("[bootstrap] Failed to run uv installer: {}", e);
-            return false;
-        }
-        _ => {}
-    }
-
-    // Verify uv actually landed on disk
-    let uv_path = home.join(".local/bin/uv");
-    if uv_path.exists() {
-        eprintln!("[bootstrap] uv installed at {:?}", uv_path);
-        true
-    } else {
-        let cargo_path = home.join(".cargo/bin/uv");
-        if cargo_path.exists() {
-            eprintln!("[bootstrap] uv installed at {:?}", cargo_path);
-            true
-        } else {
-            eprintln!("[bootstrap] uv installer ran but binary not found");
-            false
-        }
-    }
-}
-
-/// Clone the glidekit-native project to ~/glidekit-native.
-#[cfg(not(target_os = "windows"))]
-fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let target = home.join("glidekit-native");
-
-    if target.join("clip.py").exists() {
-        eprintln!("[bootstrap] Project already exists at {:?}", target);
-        return Some(target);
-    }
-
-    eprintln!("[bootstrap] Cloning glidekit-native...");
-    send_status(window, "Downloading GlideKit...");
-
-    let result = Command::new("git")
-        .args([
-            "clone",
-            "--depth", "1",
-            GLIDEKIT_NATIVE_REPO,
-            &target.to_string_lossy(),
-        ])
-        .sanitize_env()
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    match result {
-        Ok(s) if s.success() && target.join("clip.py").exists() => {
-            eprintln!("[bootstrap] Cloned to {:?}", target);
-            Some(target)
-        }
-        Ok(s) => {
-            eprintln!("[bootstrap] git clone failed (exit code {:?})", s.code());
-            None
-        }
-        Err(e) => {
-            eprintln!("[bootstrap] Failed to run git: {}", e);
-            None
-        }
-    }
-}
-
-/// Strip ANSI escape codes from a string.
-#[cfg(not(target_os = "windows"))]
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip until we hit a letter (end of ANSI sequence)
-            for c2 in chars.by_ref() {
-                if c2.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Run install.sh from the project directory with live progress to the UI.
-#[cfg(not(target_os = "windows"))]
-fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Path) -> bool {
-    use std::io::{BufRead, Write};
-
-    let script = project_dir.join("install.sh");
-    if !script.exists() {
-        eprintln!("[bootstrap] install.sh not found at {:?}", script);
-        return false;
-    }
-
-    // Open the install log (truncate each run) so users can diagnose failures.
-    // install.sh produces a lot of output; the UI only shows progress markers,
-    // so without this file the full build output is unrecoverable.
-    let install_log_path = data_dir().join("install.log");
-    let mut install_log = match fs::File::create(&install_log_path) {
-        Ok(f) => Some(f),
-        Err(e) => {
-            eprintln!("[bootstrap] Warning: could not open install log: {}", e);
-            None
-        }
-    };
-    if let Some(ref mut log) = install_log {
-        let _ = writeln!(log, "=== GlideKit install.sh log ===");
-        let _ = writeln!(log, "project_dir: {:?}", project_dir);
-        let _ = writeln!(log, "script: {:?}", script);
-        let _ = writeln!(log, "---");
-        let _ = log.flush();
-    }
-    eprintln!("[bootstrap] install.sh log: {:?}", install_log_path);
-
-    eprintln!("[bootstrap] Running install.sh in {:?}", project_dir);
-    send_status(window, "Running install script — this may take a while...");
-
-    // Ensure uv is findable by augmenting PATH with common install locations.
-    // Sudo credentials are pre-checked in the startup_sequence so apt is safe
-    // to run here — it'll use cached credentials silently.
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            eprintln!("[bootstrap] Cannot determine home directory — install.sh cannot run");
-            send_status(window, "Error: cannot find home directory");
-            return false;
-        }
-    };
-    let extra_paths = format!(
-        "{}:{}",
-        home.join(".local/bin").display(),
-        home.join(".cargo/bin").display(),
-    );
-    let path = match std::env::var("PATH") {
-        Ok(p) => format!("{}:{}", extra_paths, p),
-        Err(_) => extra_paths,
-    };
-
-    // Run install.sh with stderr merged into stdout (2>&1) so git errors
-    // and build failures are visible in the progress stream instead of lost.
-    let cmd = format!("exec bash {} 2>&1", script.to_string_lossy());
-    let result = Command::new("bash")
-        .args(["-c", &cmd])
-        .current_dir(project_dir)
-        .env("PATH", &path)
-        .env("HOME", &home)
-        // Bypass user's global git config entirely — all repos cloned by
-        // install.sh are public, no credentials or user prefs are needed.
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // Clear AppImage's LD_LIBRARY_PATH — the bundled libs (libcurl,
-        // libgnutls, etc.) conflict with system binaries like git-remote-https.
-        // Child processes (git, cmake, scons) must use the system's own libs.
-        // Clear AppImage's PYTHONHOME/PYTHONPATH — the bundled Python stdlib
-        // breaks uv's build isolation, causing "No module named 'encodings'"
-        // when hatchling tries to build openpilot as an editable install.
-        .sanitize_env()
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-
-    match result {
-        Ok(mut child) => {
-            // Stream stdout for progress updates
-            if let Some(stdout) = child.stdout.take() {
-                let reader = std::io::BufReader::new(stdout);
-                for raw_line in reader.lines().map_while(Result::ok) {
-                    let clean = strip_ansi(&raw_line);
-                    let trimmed = clean.trim();
-
-                    // Persist every line to install.log for post-mortem diagnosis.
-                    if let Some(ref mut log) = install_log {
-                        let _ = writeln!(log, "{}", clean);
-                    }
-
-                    // Match install.sh output patterns:
-                    //   "==> Step description"   — major step header
-                    //   "  OK: detail"            — success substep
-                    //   "  WARN: detail"          — warning
-                    //   "  ERROR: detail"         — failure
-                    //   "Installation complete!"  — final banner
-                    if trimmed.starts_with("==>") {
-                        let msg = trimmed.trim_start_matches("==>").trim();
-                        if !msg.is_empty() {
-                            send_status(window, msg);
-                        }
-                    } else if trimmed.starts_with("OK:") {
-                        let msg = trimmed.trim_start_matches("OK:").trim();
-                        if !msg.is_empty() {
-                            send_status(window, msg);
-                        }
-                    } else if trimmed.starts_with("WARN:") || trimmed.starts_with("ERROR:") {
-                        send_status(window, trimmed);
-                    } else if trimmed.contains("Installation complete!") {
-                        send_status(window, "Installation complete!");
-                    }
-
-                    eprintln!("[install.sh] {}", trimmed);
-                }
-            }
-
-            match child.wait() {
-                Ok(s) if s.success() => {
-                    eprintln!("[bootstrap] install.sh completed successfully");
-                    true
-                }
-                Ok(s) => {
-                    eprintln!("[bootstrap] install.sh failed (exit code {:?})", s.code());
-                    false
-                }
-                Err(e) => {
-                    eprintln!("[bootstrap] install.sh wait error: {}", e);
-                    false
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[bootstrap] Failed to launch install.sh: {}", e);
-            false
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Windows bootstrap — runs automatically when project is missing
-// ---------------------------------------------------------------------------
-
-/// Find the bootstrap.ps1 script — checks many locations and logs each attempt.
-#[cfg(target_os = "windows")]
-fn find_bootstrap_script(resource_dir: &Option<PathBuf>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    // Tauri resource dir (primary)
-    if let Some(ref res_dir) = resource_dir {
-        eprintln!("[bootstrap-find] Tauri resource_dir: {:?}", res_dir);
-        candidates.push(res_dir.join("resources").join("bootstrap.ps1"));
-        candidates.push(res_dir.join("bootstrap.ps1"));
-        if let Some(parent) = res_dir.parent() {
-            candidates.push(parent.join("resources").join("bootstrap.ps1"));
-        }
-    } else {
-        eprintln!("[bootstrap-find] Tauri resource_dir: None");
-    }
-
-    // Next to the executable (NSIS installs here)
-    if let Ok(exe) = std::env::current_exe() {
-        eprintln!("[bootstrap-find] Executable: {:?}", exe);
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("resources").join("bootstrap.ps1"));
-            candidates.push(exe_dir.join("bootstrap.ps1"));
-            // NSIS $INSTDIR is typically the exe's directory
-            if let Some(grandparent) = exe_dir.parent() {
-                candidates.push(grandparent.join("resources").join("bootstrap.ps1"));
-            }
-        }
-    }
-
-    // Check all candidates
-    for path in &candidates {
-        let exists = path.exists();
-        eprintln!("[bootstrap-find]   {:?} -> {}", path, if exists { "FOUND" } else { "not found" });
-        if exists {
-            return Some(path.clone());
-        }
-    }
-
-    eprintln!("[bootstrap-find] Script not found in any candidate location");
-    None
-}
-
-/// Download bootstrap.ps1 from GitHub as a last resort.
-#[cfg(target_os = "windows")]
-fn download_bootstrap_script() -> Option<PathBuf> {
-    let target = data_dir().join("bootstrap.ps1");
-    eprintln!("[bootstrap-download] Downloading bootstrap.ps1 from GitHub...");
-
-    let result = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &format!(
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-                 Invoke-WebRequest -Uri '{}' \
-                 -OutFile '{}'",
-                BOOTSTRAP_SCRIPT_URL,
-                target.to_string_lossy()
-            ),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .status();
-
-    match result {
-        Ok(s) if s.success() && target.exists() => {
-            eprintln!("[bootstrap-download] Downloaded to {:?}", target);
-            Some(target)
-        }
-        Ok(s) => {
-            eprintln!("[bootstrap-download] Download failed (exit code {:?})", s.code());
-            None
-        }
-        Err(e) => {
-            eprintln!("[bootstrap-download] PowerShell launch failed: {}", e);
-            None
-        }
-    }
-}
-
-/// Run the bootstrap.ps1 script with live progress updates to the window.
-#[cfg(target_os = "windows")]
-fn run_bootstrap(window: &tauri::WebviewWindow, script: &std::path::Path, clean: bool) -> bool {
-    use std::io::BufRead;
-
-    eprintln!("[bootstrap-run] Script: {:?}", script);
-    eprintln!("[bootstrap-run] Script exists: {}", script.exists());
-    eprintln!("[bootstrap-run] Script size: {:?}", fs::metadata(script).map(|m| m.len()));
-    eprintln!("[bootstrap-run] Clean: {}", clean);
-    send_status(window, if clean { "Clean install - re-downloading all files..." } else { "Setting up GlideKit..." });
-
-    fs::create_dir_all(data_dir()).ok();
-
-    let script_path = script.to_string_lossy().to_string();
-    let mut args = vec![
-        "-NoProfile".to_string(),
-        "-ExecutionPolicy".to_string(),
-        "Bypass".to_string(),
-        "-File".to_string(),
-        script_path,
-    ];
-    if clean {
-        args.push("-Clean".to_string());
-    }
-    let result = Command::new("powershell.exe")
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-
-    match result {
-        Ok(mut child) => {
-            if let Some(stdout) = child.stdout.take() {
-                let reader = std::io::BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        // Show step markers and checkpoints in the UI
-                        if line.starts_with("==>") {
-                            let msg = line.trim_start_matches("==>").trim();
-                            send_status(window, msg);
-                        } else if line.contains("[OK]") {
-                            let msg = line.trim();
-                            send_status(window, msg);
-                        } else if line.contains("[FAIL]") {
-                            let msg = line.trim();
-                            send_status(window, msg);
-                        }
-                        eprintln!("[bootstrap] {}", line);
-                    }
-                }
-            }
-
-            let status = child.wait();
-            match status {
-                Ok(s) if s.success() => {
-                    eprintln!("[bootstrap-run] Completed successfully");
-                    true
-                }
-                Ok(s) => {
-                    eprintln!("[bootstrap-run] Failed with exit code: {:?}", s.code());
-                    false
-                }
-                Err(e) => {
-                    eprintln!("[bootstrap-run] Wait error: {}", e);
-                    false
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[bootstrap-run] Failed to launch PowerShell: {}", e);
-            false
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Startup sequence (runs in background thread)
@@ -557,15 +78,15 @@ fn startup_sequence(
             });
 
             // Find the bootstrap script: bundled resources -> download from GitHub
-            let script = find_bootstrap_script(resource_path)
+            let script = bootstrap::windows::find_bootstrap_script(resource_path)
                 .or_else(|| {
                     eprintln!("[startup] Bundled script not found, downloading...");
                     send_status(win, "Downloading setup script...");
-                    download_bootstrap_script()
+                    bootstrap::windows::download_bootstrap_script()
                 });
 
             if let Some(ref script_path) = script {
-                if !run_bootstrap(win, script_path, clean_install) {
+                if !bootstrap::windows::run_bootstrap(win, script_path, clean_install) {
                     send_error(
                         win,
                         "Setup failed. Check the log at:\n%LOCALAPPDATA%\\glidekit\\bootstrap-app.log\n\nOr run debug_bootstrap.bat from the install directory.",
@@ -603,14 +124,14 @@ fn startup_sequence(
             send_status(win, "First-time setup — this may take a while...");
 
             // Step 1: Install uv if missing
-            if resolve_uv().is_none() && !install_uv(win) {
+            if resolve_uv().is_none() && !bootstrap::linux::install_uv(win) {
                 send_error(win, "Failed to install uv. Check your internet connection and try again.");
                 return;
             }
 
             // Step 2: Clone project if missing
             let project = if find_glidekit_project().is_none() {
-                match clone_project(win) {
+                match bootstrap::linux::clone_project(win) {
                     Some(p) => p,
                     None => {
                         send_error(win, "Failed to download GlideKit. Check your internet connection and try again.");
@@ -638,7 +159,7 @@ fn startup_sequence(
                 // openpilot's installer calls `sudo apt-get` on its own.
                 // Without cached credentials, the prompt is invisible in the
                 // subprocess and the install hangs silently.
-                if !check_sudo_available() {
+                if !bootstrap::linux::check_sudo_available() {
                     send_error(
                         win,
                         "Installing openpilot requires sudo access.\n\nOpen a terminal and run:\n  sudo -v\n\nThen re-launch GlideKit. Credentials will be cached for ~15 minutes, long enough for the install to finish.",
@@ -646,7 +167,7 @@ fn startup_sequence(
                     return;
                 }
                 send_status(win, "Installing dependencies — this takes 10-20 minutes...");
-                if !run_install_script(win, &project) {
+                if !bootstrap::linux::run_install_script(win, &project) {
                     send_error(
                         win,
                         "Install script failed.\n\nCheck the log for the actual error:\n  ~/.glidekit/install.log\n\nCommon causes:\n  - Missing system packages — open a terminal and run:\n      sudo apt-get install -y build-essential cmake ffmpeg git curl git-lfs\n  - Sudo credentials not cached — run `sudo -v` in a terminal first\n  - Then re-launch GlideKit",
@@ -833,58 +354,4 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("Error running Tauri application");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn env_error_display_project_not_found() {
-        let e = EnvError::ProjectNotFound;
-        assert_eq!(e.to_string(), "GlideKit project not found");
-    }
-    #[test]
-    fn env_error_display_uv_not_found() {
-        let e = EnvError::UvNotFound;
-        assert_eq!(e.to_string(), "uv binary not found");
-    }
-    #[test]
-    fn env_error_display_openpilot_not_installed() {
-        let e = EnvError::OpenpilotNotInstalled;
-        assert_eq!(e.to_string(), "openpilot is not installed");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn strip_ansi_removes_color_codes() {
-        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn strip_ansi_removes_bold() {
-        assert_eq!(strip_ansi("\x1b[1mbold\x1b[0m text"), "bold text");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn strip_ansi_preserves_plain_text() {
-        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn strip_ansi_handles_empty_string() {
-        assert_eq!(strip_ansi(""), "");
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn strip_ansi_handles_multiple_sequences() {
-        assert_eq!(
-            strip_ansi("\x1b[32m[OK]\x1b[0m: \x1b[1mbuild\x1b[0m done"),
-            "[OK]: build done"
-        );
-    }
 }
