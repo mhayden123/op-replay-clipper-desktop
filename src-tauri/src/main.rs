@@ -30,6 +30,17 @@ impl CommandExt for Command {
     }
 }
 
+const SERVER_PORT: u16 = 7860;
+const SERVER_HOST: &str = "127.0.0.1";
+const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
+#[cfg(target_os = "windows")]
+const BOOTSTRAP_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/mhayden123/glidekit-desktop/main/src-tauri/resources/bootstrap.ps1";
+#[cfg(not(target_os = "windows"))]
+const GLIDEKIT_NATIVE_REPO: &str = "https://github.com/mhayden123/glidekit-native.git";
+#[cfg(target_os = "windows")]
+const REGISTRY_KEY: &str = r"HKCU\Software\GlideKit";
+
 const SERVER_URL: &str = "http://localhost:7860";
 const HEALTH_URL: &str = "http://localhost:7860/api/health";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
@@ -74,7 +85,7 @@ fn read_registry_string(name: &str) -> Option<String> {
     let output = Command::new("reg.exe")
         .args([
             "query",
-            r"HKCU\Software\GlideKit",
+            REGISTRY_KEY,
             "/v",
             name,
         ])
@@ -336,20 +347,21 @@ fn kill_stale_server() {
     use std::net::TcpStream;
 
     // Quick check: if nothing is listening, skip the heavier lsof/netstat call.
-    if TcpStream::connect("127.0.0.1:7860").is_err() {
+    if TcpStream::connect((SERVER_HOST, SERVER_PORT)).is_err() {
         // Also check 0.0.0.0 binding (legacy pre-fix servers).
-        if TcpStream::connect(("0.0.0.0", 7860u16)).is_err() {
+        if TcpStream::connect(("0.0.0.0", SERVER_PORT)).is_err() {
             return;
         }
     }
 
-    eprintln!("[server] Port 7860 is in use — killing stale server...");
+    eprintln!("[server] Port {} is in use — killing stale server...", SERVER_PORT);
 
     #[cfg(unix)]
     {
-        // `lsof -ti :7860` returns PIDs of processes listening on the port.
+        // `lsof -ti :<port>` returns PIDs of processes listening on the port.
+        let lsof_port = format!(":{}", SERVER_PORT);
         if let Ok(output) = Command::new("lsof")
-            .args(["-ti", ":7860"])
+            .args(["-ti", &lsof_port])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -369,8 +381,9 @@ fn kill_stale_server() {
     #[cfg(windows)]
     {
         // Find PID via netstat, then taskkill it.
+        let netstat_cmd = format!("netstat -ano | findstr :{} | findstr LISTENING", SERVER_PORT);
         if let Ok(output) = Command::new("cmd")
-            .args(["/C", "netstat -ano | findstr :7860 | findstr LISTENING"])
+            .args(["/C", &netstat_cmd])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -464,9 +477,9 @@ fn start_server(project_dir: &PathBuf, uv_path: &str) -> Result<Child, String> {
             "uvicorn",
             "web.server:app",
             "--host",
-            "127.0.0.1",
+            SERVER_HOST,
             "--port",
-            "7860",
+            &SERVER_PORT.to_string(),
         ])
         .current_dir(project_dir)
         .env("GLIDEKIT_HOME", data_dir().to_string_lossy().as_ref())
@@ -504,7 +517,7 @@ fn wait_for_server() -> bool {
                 return true;
             }
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(HEALTH_POLL_INTERVAL);
     }
     eprintln!("Server did not start in time.");
     false
@@ -618,7 +631,7 @@ fn clone_project(window: &tauri::WebviewWindow) -> Option<PathBuf> {
         .args([
             "clone",
             "--depth", "1",
-            "https://github.com/mhayden123/glidekit-native.git",
+            GLIDEKIT_NATIVE_REPO,
             &target.to_string_lossy(),
         ])
         .sanitize_env()
@@ -859,8 +872,9 @@ fn download_bootstrap_script() -> Option<PathBuf> {
             "-Command",
             &format!(
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-                 Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/mhayden123/glidekit-desktop/main/src-tauri/resources/bootstrap.ps1' \
+                 Invoke-WebRequest -Uri '{}' \
                  -OutFile '{}'",
+                BOOTSTRAP_SCRIPT_URL,
                 target.to_string_lossy()
             ),
         ])
