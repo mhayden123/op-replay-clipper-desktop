@@ -714,7 +714,14 @@ fn run_install_script(window: &tauri::WebviewWindow, project_dir: &std::path::Pa
     // Ensure uv is findable by augmenting PATH with common install locations.
     // Sudo credentials are pre-checked in the startup_sequence so apt is safe
     // to run here — it'll use cached credentials silently.
-    let home = dirs::home_dir().unwrap_or_default();
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            eprintln!("[bootstrap] Cannot determine home directory — install.sh cannot run");
+            send_status(window, "Error: cannot find home directory");
+            return false;
+        }
+    };
     let extra_paths = format!(
         "{}:{}",
         home.join(".local/bin").display(),
