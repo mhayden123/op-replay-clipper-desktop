@@ -197,9 +197,9 @@ fn resolve_uv() -> Option<String> {
             home.join(".local/bin/uv"),
             home.join(".cargo/bin/uv"),
             home.join(".local/share/uv/bin/uv"),
-            PathBuf::from("/usr/local/bin/uv"),
-            PathBuf::from("/usr/bin/uv"),
-            PathBuf::from("/opt/homebrew/bin/uv"),          // macOS Apple Silicon Homebrew
+            PathBuf::from("/usr/local/bin/uv"),                 // macOS Intel Homebrew + manual installs
+            PathBuf::from("/usr/bin/uv"),                       // system package manager
+            PathBuf::from("/opt/homebrew/bin/uv"),              // macOS Apple Silicon Homebrew
             PathBuf::from("/home/linuxbrew/.linuxbrew/bin/uv"), // Linux Homebrew
         ]
     };
