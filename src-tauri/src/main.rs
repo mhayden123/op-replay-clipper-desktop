@@ -12,8 +12,10 @@
 
 mod constants;
 mod env_sanitize;
+mod state;
 use constants::*;
 use env_sanitize::CommandExt;
+use state::AppState;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,14 +25,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-
-// ---------------------------------------------------------------------------
-// App state
-// ---------------------------------------------------------------------------
-
-struct AppState {
-    server_process: Mutex<Option<Child>>,
-}
 
 // ---------------------------------------------------------------------------
 // Path detection
